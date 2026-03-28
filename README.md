@@ -45,14 +45,13 @@ AIが全データに簡単にアクセスできるため、作業を自動化で
 
 - **`workspace/meta.json`**: ワークスペースのメタ情報（version / updatedAt）
 - **`workspace/profile.json`**: プロフィール情報
-- **`workspace/companies.json`**: 企業データ一覧
+- **`workspace/companies/*.json`**: 企業データ（1社1ファイル、`{slug}.json`）
 - **`workspace/tasks.json`**: タスク一覧
 - **`workspace/journal-entries.json`**: ノート一覧
-- **`companies/*.md`**: 企業ごとの情報をAIが読み取れる形式でまとめたMarkdown
+- **`companies/*.md`**: 企業ごとの情報をAIが読み取れる形式でまとめたMarkdown（自動生成）
 - **`ai/context.json`**: プロフィールに加えて、ステージ別件数・高優先企業・直近期限タスク・更新鮮度を含む意思決定向けコンテキスト
 - **`ai/upcoming-events.json`**: 直近の期限や面接日程
 - **`ai/notes-index.md`**: 日次ノートのタイトルと要約をAIが横断検索しやすい形式でまとめたインデックス
-- **`ai/generated-company-files.json`**: 自動生成された `companies/*.md` の管理用manifest（安全なクリーンアップ用）
 - **`dashboard.md`**: ダッシュボードの要約
 - **`calendar.ics`**: カレンダーアプリ（Googleカレンダー等）に取り込めるICSファイル
 

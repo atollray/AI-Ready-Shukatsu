@@ -1,4 +1,4 @@
-import { promises as fs } from "fs";
+import { promises as fs, Dirent } from "fs";
 import path from "path";
 
 import { createDefaultWorkspaceData } from "@/lib/default-data";
@@ -19,17 +19,13 @@ const WORKSPACE_SPLIT_DIR = path.join(DATA_DIR, "workspace");
 const WORKSPACE_META_FILE = path.join(WORKSPACE_SPLIT_DIR, "meta.json");
 const WORKSPACE_PROFILE_FILE = path.join(WORKSPACE_SPLIT_DIR, "profile.json");
 const WORKSPACE_TASKS_FILE = path.join(WORKSPACE_SPLIT_DIR, "tasks.json");
-const WORKSPACE_COMPANIES_FILE = path.join(WORKSPACE_SPLIT_DIR, "companies.json");
+const WORKSPACE_COMPANIES_DIR = path.join(WORKSPACE_SPLIT_DIR, "companies");
 const WORKSPACE_JOURNAL_FILE = path.join(
   WORKSPACE_SPLIT_DIR,
   "journal-entries.json"
 );
 const COMPANIES_DIR = path.join(DATA_DIR, "companies");
 const AI_DIR = path.join(DATA_DIR, "ai");
-const GENERATED_COMPANY_MANIFEST_FILE = path.join(
-  AI_DIR,
-  "generated-company-files.json"
-);
 const UPCOMING_LIMIT = 8;
 const TOP_COMPANIES_LIMIT = 5;
 const CONTEXT_TASK_LIMIT = 5;
@@ -38,11 +34,6 @@ const EXCLUDED_UPCOMING_STAGES = new Set<CompanyRecord["stage"]>([
   "paused",
   "rejected",
 ]);
-
-type GeneratedCompanyManifest = {
-  files: string[];
-  updatedAt: string;
-};
 
 type WorkspaceMeta = {
   version: number;
@@ -563,48 +554,18 @@ function buildCompanyDeadlineSummary(company: CompanyRecord): string {
     : "- なし";
 }
 
-async function readGeneratedCompanyManifest(): Promise<GeneratedCompanyManifest> {
+async function cleanupStaleCompanyMdFiles(currentSlugs: Set<string>): Promise<void> {
+  let entries: Dirent<string>[];
   try {
-    const raw = await fs.readFile(GENERATED_COMPANY_MANIFEST_FILE, "utf8");
-    const parsed = JSON.parse(raw) as Partial<GeneratedCompanyManifest>;
-    return {
-      files: Array.isArray(parsed.files) ? parsed.files.slice() : [],
-      updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : "",
-    };
+    entries = await fs.readdir(COMPANIES_DIR, { withFileTypes: true });
   } catch {
-    return { files: [], updatedAt: "" };
+    return;
   }
-}
-
-async function cleanupStaleCompanyFiles(currentFiles: string[]): Promise<void> {
-  const manifest = await readGeneratedCompanyManifest();
-  const current = new Set(currentFiles);
 
   await Promise.all(
-    manifest.files
-      .filter((fileName) => !current.has(fileName))
-      .map(async (fileName) => {
-        const target = path.join(COMPANIES_DIR, fileName);
-        if (path.dirname(target) !== COMPANIES_DIR) {
-          return;
-        }
-
-        try {
-          await fs.unlink(target);
-        } catch (error) {
-          const code = (error as NodeJS.ErrnoException).code;
-          if (code !== "ENOENT") {
-            throw error;
-          }
-        }
-      })
-  );
-
-  // Migration cleanup: company-level JSON is no longer generated.
-  const companyEntries = await fs.readdir(COMPANIES_DIR, { withFileTypes: true });
-  await Promise.all(
-    companyEntries
-      .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+    entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+      .filter((entry) => !currentSlugs.has(entry.name.slice(0, -3)))
       .map(async (entry) => {
         const target = path.join(COMPANIES_DIR, entry.name);
         try {
@@ -617,11 +578,6 @@ async function cleanupStaleCompanyFiles(currentFiles: string[]): Promise<void> {
         }
       })
   );
-
-  await writeJson(GENERATED_COMPANY_MANIFEST_FILE, {
-    files: currentFiles,
-    updatedAt: new Date().toISOString(),
-  } satisfies GeneratedCompanyManifest);
 }
 
 function formatTaskDateLabel(value: string): string {
@@ -887,6 +843,7 @@ function buildCalendarIcs(workspace: WorkspaceData): string {
 async function ensureDirectories(): Promise<void> {
   await fs.mkdir(DATA_DIR, { recursive: true });
   await fs.mkdir(WORKSPACE_SPLIT_DIR, { recursive: true });
+  await fs.mkdir(WORKSPACE_COMPANIES_DIR, { recursive: true });
   await fs.mkdir(COMPANIES_DIR, { recursive: true });
   await fs.mkdir(AI_DIR, { recursive: true });
 }
@@ -909,12 +866,38 @@ async function writeJson(filePath: string, value: unknown): Promise<void> {
   await fs.writeFile(filePath, JSON.stringify(value, null, 2), "utf8");
 }
 
+async function loadCompaniesFromDir(): Promise<unknown[] | null> {
+  let entries: Dirent<string>[];
+  try {
+    entries = await fs.readdir(WORKSPACE_COMPANIES_DIR, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+
+  const jsonFiles = entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+    .map((entry) => entry.name)
+    .sort();
+
+  if (jsonFiles.length === 0) {
+    return null;
+  }
+
+  const records = await Promise.all(
+    jsonFiles.map((fileName) =>
+      readJson(path.join(WORKSPACE_COMPANIES_DIR, fileName))
+    )
+  );
+
+  return records.filter((r): r is unknown => r !== null);
+}
+
 async function loadSplitWorkspace(): Promise<WorkspaceData | null> {
   const [metaRaw, profile, tasks, companies, journalEntries] = await Promise.all([
     readJson(WORKSPACE_META_FILE),
     readJson(WORKSPACE_PROFILE_FILE),
     readJson(WORKSPACE_TASKS_FILE),
-    readJson(WORKSPACE_COMPANIES_FILE),
+    loadCompaniesFromDir(),
     readJson(WORKSPACE_JOURNAL_FILE),
   ]);
 
@@ -939,6 +922,41 @@ async function loadSplitWorkspace(): Promise<WorkspaceData | null> {
   });
 }
 
+async function syncCompaniesToDir(companies: CompanyRecord[]): Promise<void> {
+  const currentSlugs = new Set(companies.map((c) => c.slug));
+
+  // 削除された企業のファイルを消す
+  let existing: Dirent<string>[];
+  try {
+    existing = await fs.readdir(WORKSPACE_COMPANIES_DIR, { withFileTypes: true });
+  } catch {
+    existing = [];
+  }
+  await Promise.all(
+    existing
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+      .filter((entry) => !currentSlugs.has(entry.name.slice(0, -5)))
+      .map(async (entry) => {
+        try {
+          await fs.unlink(path.join(WORKSPACE_COMPANIES_DIR, entry.name));
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code !== "ENOENT") throw error;
+        }
+      })
+  );
+
+  // 各企業を個別ファイルに書き込む
+  await Promise.all(
+    companies.map((company) =>
+      writeJson(
+        path.join(WORKSPACE_COMPANIES_DIR, `${company.slug}.json`),
+        company
+      )
+    )
+  );
+}
+
 async function writeSplitWorkspace(workspace: WorkspaceData): Promise<void> {
   await ensureDirectories();
 
@@ -949,7 +967,7 @@ async function writeSplitWorkspace(workspace: WorkspaceData): Promise<void> {
     } satisfies WorkspaceMeta),
     writeJson(WORKSPACE_PROFILE_FILE, workspace.profile),
     writeJson(WORKSPACE_TASKS_FILE, workspace.tasks),
-    writeJson(WORKSPACE_COMPANIES_FILE, workspace.companies),
+    syncCompaniesToDir(workspace.companies),
     writeJson(WORKSPACE_JOURNAL_FILE, workspace.journalEntries),
   ]);
 }
@@ -957,9 +975,7 @@ async function writeSplitWorkspace(workspace: WorkspaceData): Promise<void> {
 async function syncAiExports(workspace: WorkspaceData): Promise<void> {
   await ensureDirectories();
   const upcomingItems = buildUpcomingItems(workspace);
-  const generatedCompanyFiles = workspace.companies.map(
-    (company) => `${company.slug}.md`
-  );
+  const currentSlugs = new Set(workspace.companies.map((c) => c.slug));
 
   await writeJson(path.join(AI_DIR, "context.json"), buildContextSummary(workspace));
   await writeJson(
@@ -1045,7 +1061,7 @@ async function syncAiExports(workspace: WorkspaceData): Promise<void> {
       );
     })
   );
-  await cleanupStaleCompanyFiles(generatedCompanyFiles);
+  await cleanupStaleCompanyMdFiles(currentSlugs);
 }
 
 export async function ensureWorkspace(): Promise<WorkspaceData> {
