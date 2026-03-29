@@ -518,17 +518,53 @@ function buildFreshnessSummary(workspace: WorkspaceData) {
   };
 }
 
-function buildContextSummary(workspace: WorkspaceData) {
-  return {
-    profile: workspace.profile,
-    companyCount: workspace.companies.length,
-    taskCount: workspace.tasks.length,
-    updatedAt: workspace.updatedAt,
-    stageCounts: buildStageCounts(workspace),
-    highPriorityCompanies: buildHighPriorityCompanies(workspace),
-    upcomingTasks: buildDueTasksSummary(workspace),
-    freshness: buildFreshnessSummary(workspace),
-  };
+function buildContextMarkdown(workspace: WorkspaceData): string {
+  const profile = workspace.profile;
+  const stageCounts = buildStageCounts(workspace);
+  const highPri = buildHighPriorityCompanies(workspace);
+  const upTasks = buildDueTasksSummary(workspace);
+  const fresh = buildFreshnessSummary(workspace);
+
+  return `# AI-Ready Shukatsu Context
+
+## Workspace Stats
+- Total Companies: ${workspace.companies.length}
+- Total Tasks: ${workspace.tasks.length}
+- Updated at: ${workspace.updatedAt}
+
+## Stage Counts
+${Object.entries(stageCounts).map(([stage, count]) => `- ${stage}: ${count}`).join("\n")}
+
+## High Priority Companies
+${highPri.length ? highPri.map(c => `- ${c.name} (Score: ${c.combinedScore}) | Next: ${c.nextAction || "未設定"}`).join("\n") : "- なし"}
+
+## Upcoming Tasks
+${upTasks.length ? upTasks.map(t => `- ${t.dueDate} | ${t.state} | ${t.relatedCompanyName || "共通"}: ${t.title}`).join("\n") : "- なし"}
+
+## Freshness (Stalest Companies)
+${fresh.stalestCompanies.length ? fresh.stalestCompanies.map(c => `- ${c.name} | Days since update: ${c.daysSinceUpdate !== null ? c.daysSinceUpdate : "unknown"}`).join("\n") : "- なし"}
+
+## Profile Highlights
+- Name: ${profile.name || "未入力"}
+- Desired Roles: ${profile.desiredRoles.join(", ") || "未入力"}
+- Weekly Focus:
+${profile.weeklyFocus ? profile.weeklyFocus.split("\n").map(line => `  ${line}`).join("\n") : "  未入力"}
+`;
+}
+
+function buildUpcomingEventsMarkdown(upcomingItems: any[]): string {
+  if (upcomingItems.length === 0) {
+    return "# Upcoming Events\n\n- 近日予定はありません\n";
+  }
+
+  const lines = upcomingItems.map(item => {
+    if (item.source === "task") {
+      return `- ${item.date} | Task | ${item.company || "共通"} | ${item.title} | ${item.notes ? item.notes.replace(/\n/g, " ") : ""}`;
+    }
+    return `- ${item.date} | ${item.eventType} | ${item.company} | ${item.title} | ${item.location || "場所未設定"} | ${item.notes ? item.notes.replace(/\n/g, " ") : ""}`;
+  });
+
+  return `# Upcoming Events\n\n${lines.join("\n")}\n`;
 }
 
 function buildCompanyDeadlineSummary(company: CompanyRecord): string {
@@ -977,37 +1013,15 @@ async function syncAiExports(workspace: WorkspaceData): Promise<void> {
   const upcomingItems = buildUpcomingItems(workspace);
   const currentSlugs = new Set(workspace.companies.map((c) => c.slug));
 
-  await writeJson(path.join(AI_DIR, "context.json"), buildContextSummary(workspace));
-  await writeJson(
-    path.join(AI_DIR, "upcoming-events.json"),
-    upcomingItems.map((item) => {
-      if (item.source === "task") {
-        return {
-          source: item.source,
-          company: item.company,
-          stage: item.stage,
-          id: item.id,
-          title: item.title,
-          type: "task",
-          state: item.state,
-          date: item.date,
-          location: "",
-          notes: item.notes,
-        };
-      }
-
-      return {
-        source: item.source,
-        company: item.company,
-        stage: item.stage,
-        id: item.id,
-        title: item.title,
-        type: item.eventType,
-        date: item.date,
-        location: item.location,
-        notes: item.notes,
-      };
-    })
+  await fs.writeFile(
+    path.join(AI_DIR, "context.md"),
+    buildContextMarkdown(workspace),
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(AI_DIR, "upcoming-events.md"),
+    buildUpcomingEventsMarkdown(upcomingItems),
+    "utf8"
   );
   await fs.writeFile(
     path.join(DATA_DIR, "dashboard.md"),
