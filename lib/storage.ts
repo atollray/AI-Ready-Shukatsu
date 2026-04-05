@@ -552,7 +552,7 @@ ${profile.weeklyFocus ? profile.weeklyFocus.split("\n").map(line => `  ${line}`)
 `;
 }
 
-function buildUpcomingEventsMarkdown(upcomingItems: any[]): string {
+function buildUpcomingEventsMarkdown(upcomingItems: UpcomingItem[]): string {
   if (upcomingItems.length === 0) {
     return "# Upcoming Events\n\n- 近日予定はありません\n";
   }
