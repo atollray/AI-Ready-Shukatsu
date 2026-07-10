@@ -266,19 +266,35 @@ export function JobHunt({
 
       if (rawDraft) {
         const parsed = JSON.parse(rawDraft) as WorkspaceData;
+        const draftTime = Date.parse(parsed?.updatedAt ?? "");
+        const diskTime = Date.parse(initialWorkspace.updatedAt ?? "");
+        const draftIsNewer =
+          !Number.isNaN(draftTime) &&
+          (Number.isNaN(diskTime) || draftTime > diskTime);
 
-        startTransition(() => {
-          setWorkspace(parsed);
-          setSelectedCompanyId(parsed.companies[0]?.id || "");
-          setSaveState("dirty");
-          setSaveMessage("ブラウザ下書きを復元しました。必要なら保存してください。");
-        });
+        if (draftIsNewer && Array.isArray(parsed.companies)) {
+          startTransition(() => {
+            setWorkspace(parsed);
+            setSelectedCompanyId(parsed.companies[0]?.id || "");
+            setSaveState("dirty");
+            setSaveMessage(
+              "未保存のブラウザ下書きを復元しました。必要なら保存してください。"
+            );
+          });
+        } else {
+          window.localStorage.removeItem(DRAFT_STORAGE_KEY);
+          setSaveMessage(
+            "ディスク上のデータが最新のため、古いブラウザ下書きを破棄しました。"
+          );
+        }
       }
     } catch {
       window.localStorage.removeItem(DRAFT_STORAGE_KEY);
     } finally {
       hydratedRef.current = true;
     }
+    // initialWorkspace はマウント時の初期スナップショットで不変のため依存に含めない（下書き復元は初回のみ実行する）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [startTransition]);
 
   useEffect(() => {
@@ -286,9 +302,19 @@ export function JobHunt({
       return;
     }
 
+    if (saveState === "saved") {
+      window.localStorage.removeItem(DRAFT_STORAGE_KEY);
+      setDraftTimestamp("");
+      return;
+    }
+
+    if (saveState === "idle") {
+      return;
+    }
+
     window.localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(workspace));
     setDraftTimestamp(new Date().toLocaleString("ja-JP"));
-  }, [workspace]);
+  }, [workspace, saveState]);
 
   useEffect(() => {
     if (

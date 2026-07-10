@@ -309,7 +309,10 @@ export function normalizeWorkspace(value: unknown): WorkspaceData {
 
   return {
     version: typeof base.version === "number" ? base.version : 1,
-    updatedAt: new Date().toISOString(),
+    updatedAt:
+      typeof base.updatedAt === "string" && base.updatedAt
+        ? base.updatedAt
+        : new Date().toISOString(),
     profile: {
       name: normalizeString(base.profile?.name),
       school: normalizeString(base.profile?.school),
@@ -824,7 +827,11 @@ ${workspace.companies.length ? workspace.companies.map((company) => `- ${company
 }
 
 function escapeIcsText(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/\n/g, "\\n").replace(/,/g, "\\,");
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/;/g, "\\;")
+    .replace(/,/g, "\\,")
+    .replace(/\n/g, "\\n");
 }
 
 function toIcsDate(value: string): string {
@@ -833,6 +840,27 @@ function toIcsDate(value: string): string {
   }
 
   return value.replace(/-/g, "");
+}
+
+function foldIcsLine(line: string): string {
+  const maxOctets = 75;
+  let output = "";
+  let segment = "";
+  let segmentOctets = 0;
+  let first = true;
+  for (const ch of line) {
+    const octets = Buffer.byteLength(ch, "utf8");
+    const limit = first ? maxOctets : maxOctets - 1;
+    if (segmentOctets + octets > limit) {
+      output += (first ? "" : " ") + segment + "\r\n";
+      segment = "";
+      segmentOctets = 0;
+      first = false;
+    }
+    segment += ch;
+    segmentOctets += octets;
+  }
+  return output + (first ? "" : " ") + segment;
 }
 
 function buildCalendarIcs(workspace: WorkspaceData): string {
@@ -873,7 +901,7 @@ function buildCalendarIcs(workspace: WorkspaceData): string {
     "END:VCALENDAR",
   ];
 
-  return `${lines.join("\r\n")}\r\n`;
+  return `${lines.map(foldIcsLine).join("\r\n")}\r\n`;
 }
 
 async function ensureDirectories(): Promise<void> {
@@ -885,16 +913,23 @@ async function ensureDirectories(): Promise<void> {
 }
 
 async function readJson(filePath: string): Promise<unknown | null> {
+  let raw: string;
   try {
-    const raw = await fs.readFile(filePath, "utf8");
-    return JSON.parse(raw);
+    raw = await fs.readFile(filePath, "utf8");
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ENOENT") {
       return null;
     }
-
     throw error;
+  }
+
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    throw new Error(
+      `データファイルの解析に失敗しました: ${filePath} (${(error as Error).message})`
+    );
   }
 }
 
@@ -902,22 +937,18 @@ async function writeJson(filePath: string, value: unknown): Promise<void> {
   await fs.writeFile(filePath, JSON.stringify(value, null, 2), "utf8");
 }
 
-async function loadCompaniesFromDir(): Promise<unknown[] | null> {
+async function loadCompaniesFromDir(): Promise<unknown[]> {
   let entries: Dirent<string>[];
   try {
     entries = await fs.readdir(WORKSPACE_COMPANIES_DIR, { withFileTypes: true });
   } catch {
-    return null;
+    return [];
   }
 
   const jsonFiles = entries
     .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
     .map((entry) => entry.name)
     .sort();
-
-  if (jsonFiles.length === 0) {
-    return null;
-  }
 
   const records = await Promise.all(
     jsonFiles.map((fileName) =>
@@ -941,7 +972,6 @@ async function loadSplitWorkspace(): Promise<WorkspaceData | null> {
     metaRaw === null ||
     profile === null ||
     tasks === null ||
-    companies === null ||
     journalEntries === null
   ) {
     return null;
@@ -1083,7 +1113,6 @@ export async function ensureWorkspace(): Promise<WorkspaceData> {
 
   const splitWorkspace = await loadSplitWorkspace();
   if (splitWorkspace) {
-    await syncAiExports(splitWorkspace);
     return splitWorkspace;
   }
 
@@ -1100,6 +1129,7 @@ export async function loadWorkspace(): Promise<WorkspaceData> {
 
 export async function saveWorkspace(workspace: unknown): Promise<WorkspaceData> {
   const normalized = normalizeWorkspace(workspace);
+  normalized.updatedAt = new Date().toISOString();
   await writeSplitWorkspace(normalized);
   await syncAiExports(normalized);
   return normalized;
