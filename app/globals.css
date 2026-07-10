@@ -856,3 +856,50 @@ button {
 [data-theme="dark"] .footer-note {
   background: rgba(0, 0, 0, 0.15);
 }
+
+.undo-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: min(560px, calc(100vw - 32px));
+  padding: 12px 12px 12px 18px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line);
+  background: var(--surface-strong);
+  box-shadow: var(--shadow);
+}
+
+.undo-toast-message {
+  flex: 1;
+  font-size: 0.88rem;
+  color: var(--text);
+}
+
+.undo-toast-close {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+}
+
+@media (max-width: 640px) {
+  .undo-toast {
+    left: 16px;
+    right: 16px;
+    transform: none;
+    max-width: none;
+  }
+}
+
+[data-theme="dark"] .undo-toast {
+  background: var(--surface-dark);
+  border-color: rgba(255, 255, 255, 0.12);
+}

@@ -1,9 +1,11 @@
 "use client";
 
 import {
+  type ChangeEvent,
   type ReactNode,
   useDeferredValue,
   useEffect,
+  useId,
   useRef,
   useState,
   useTransition,
@@ -96,6 +98,21 @@ function todayLocalDateString(): string {
 
 function isUpcomingDate(value: string, today: string): boolean {
   return /^\d{4}-\d{2}-\d{2}$/.test(value) && value >= today;
+}
+
+function isWorkspaceLike(value: unknown): value is WorkspaceData {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  return (
+    Array.isArray(candidate.companies) &&
+    Array.isArray(candidate.tasks) &&
+    Array.isArray(candidate.journalEntries) &&
+    typeof candidate.profile === "object" &&
+    candidate.profile !== null
+  );
 }
 
 function getCompanyName(workspace: WorkspaceData, companyId: string): string {
@@ -243,6 +260,12 @@ export function JobHunt({
   const [taskStateFilter, setTaskStateFilter] = useState("all");
   const [taskCompanyFilter, setTaskCompanyFilter] = useState("all");
   const [expandedNoteId, setExpandedNoteId] = useState<string | null>(null);
+  const [undoState, setUndoState] = useState<{
+    snapshot: WorkspaceData;
+    message: string;
+  } | null>(null);
+  const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
   const [isPending, startTransition] = useTransition();
   const hydratedRef = useRef(false);
   // 楽観ロック用: 「ディスクから読み込んだ時点」の updatedAt。
@@ -256,6 +279,29 @@ export function JobHunt({
   useEffect(() => {
     workspaceRef.current = workspace;
   }, [workspace]);
+
+  // 未保存の変更があるままタブ/ウィンドウを閉じようとしたら警告する。
+  useEffect(() => {
+    if (saveState !== "dirty" && saveState !== "error") {
+      return;
+    }
+
+    const handler = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [saveState]);
+
+  // アンマウント時に Undo タイマーを止める。
+  useEffect(() => {
+    return () => {
+      if (undoTimerRef.current) {
+        clearTimeout(undoTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const isDark = document.documentElement.getAttribute("data-theme") === "dark";
@@ -433,6 +479,96 @@ export function JobHunt({
     markDirty();
   }
 
+  // 削除操作の直前スナップショットを保持し、一定時間だけ取り消しを提示する。
+  function offerUndo(snapshot: WorkspaceData, message: string) {
+    if (undoTimerRef.current) {
+      clearTimeout(undoTimerRef.current);
+    }
+    setUndoState({ snapshot, message });
+    undoTimerRef.current = setTimeout(() => setUndoState(null), 8000);
+  }
+
+  function performUndo() {
+    if (!undoState) {
+      return;
+    }
+    if (undoTimerRef.current) {
+      clearTimeout(undoTimerRef.current);
+    }
+    const snapshot = undoState.snapshot;
+    setUndoState(null);
+    setWorkspace({ ...snapshot, updatedAt: new Date().toISOString() });
+    markDirty("削除を取り消しました。");
+  }
+
+  function dismissUndo() {
+    if (undoTimerRef.current) {
+      clearTimeout(undoTimerRef.current);
+    }
+    setUndoState(null);
+  }
+
+  function exportWorkspace() {
+    const blob = new Blob([JSON.stringify(workspace, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `shukatsu-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+    setSaveMessage("バックアップ JSON を書き出しました。");
+  }
+
+  function handleImportFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    // 同じファイルを続けて選び直せるように毎回リセットする。
+    event.target.value = "";
+    if (!file) {
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(String(reader.result));
+      } catch {
+        setSaveState("error");
+        setSaveMessage("インポートに失敗しました。JSON として読み取れません。");
+        return;
+      }
+
+      if (!isWorkspaceLike(parsed)) {
+        setSaveState("error");
+        setSaveMessage(
+          "インポートに失敗しました。就活データの形式（profile / companies / tasks / journalEntries）ではありません。"
+        );
+        return;
+      }
+
+      if (
+        !window.confirm(
+          "読み込んだ内容で現在の編集を置き換えます。よろしいですか？（保存するまでディスクには反映されません）"
+        )
+      ) {
+        return;
+      }
+
+      const snapshot = workspace;
+      startTransition(() => {
+        setWorkspace(parsed);
+        setSelectedCompanyId(parsed.companies[0]?.id || "");
+      });
+      markDirty("バックアップを読み込みました。内容を確認して保存してください。");
+      offerUndo(snapshot, "インポート前の状態に戻せます。");
+    };
+    reader.readAsText(file);
+  }
+
   function replaceCompany(
     companyId: string,
     updater: (company: CompanyRecord) => CompanyRecord
@@ -464,11 +600,11 @@ export function JobHunt({
 
   function removeCompany(companyId: string) {
     const company = workspace.companies.find((item) => item.id === companyId);
-
-    if (!company || !window.confirm(`「${company.name}」を削除しますか？`)) {
+    if (!company) {
       return;
     }
 
+    const snapshot = workspace;
     updateWorkspace((current) => ({
       ...current,
       companies: current.companies.filter((item) => item.id !== companyId),
@@ -481,7 +617,7 @@ export function JobHunt({
           : entry
       ),
     }));
-    setSaveMessage("企業を削除しました。");
+    offerUndo(snapshot, `「${company.name}」を削除しました。`);
   }
 
   function addTaskItem() {
@@ -501,10 +637,13 @@ export function JobHunt({
   }
 
   function removeTask(taskId: string) {
+    const task = workspace.tasks.find((item) => item.id === taskId);
+    const snapshot = workspace;
     updateWorkspace((current) => ({
       ...current,
-      tasks: current.tasks.filter((task) => task.id !== taskId),
+      tasks: current.tasks.filter((item) => item.id !== taskId),
     }));
+    offerUndo(snapshot, `タスク${task?.title ? `「${task.title}」` : ""}を削除しました。`);
   }
 
   function addJournal(): string {
@@ -526,10 +665,13 @@ export function JobHunt({
   }
 
   function removeJournal(entryId: string) {
+    const entry = workspace.journalEntries.find((item) => item.id === entryId);
+    const snapshot = workspace;
     updateWorkspace((current) => ({
       ...current,
-      journalEntries: current.journalEntries.filter((entry) => entry.id !== entryId),
+      journalEntries: current.journalEntries.filter((item) => item.id !== entryId),
     }));
+    offerUndo(snapshot, `ノート${entry?.title ? `「${entry.title}」` : ""}を削除しました。`);
   }
 
   function saveToDisk() {
@@ -655,6 +797,7 @@ export function JobHunt({
               onClick={toggleTheme}
               style={{ width: "38px", height: "38px", padding: 0, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: "50%" }}
               title="テーマ切り替え"
+              aria-label={theme === "light" ? "ダークテーマに切り替え" : "ライトテーマに切り替え"}
               type="button"
             >
               {theme === "light" ? "🌙" : "☀️"}
@@ -1327,6 +1470,64 @@ export function JobHunt({
               ブラウザ下書き: {draftTimestamp || "未作成"}
             </div>
           </section>
+
+          <section className="panel">
+            <div className="section-header">
+              <div>
+                <h2 className="section-title">バックアップ</h2>
+                <p className="section-copy">
+                  全データを1つの JSON に書き出し／読み込みできます。端末間の移動や手動バックアップに。
+                </p>
+              </div>
+            </div>
+            <div className="save-row">
+              <button
+                className="button-secondary"
+                type="button"
+                onClick={exportWorkspace}
+              >
+                エクスポート（JSON）
+              </button>
+              <button
+                className="button-ghost"
+                type="button"
+                onClick={() => importInputRef.current?.click()}
+              >
+                インポート（JSON）
+              </button>
+              <input
+                ref={importInputRef}
+                type="file"
+                accept="application/json,.json"
+                onChange={handleImportFile}
+                style={{ display: "none" }}
+              />
+            </div>
+            <div className="footer-note" style={{ marginTop: 12 }}>
+              インポートは現在の編集を置き換えます（保存するまでディスクへは書き込まれません）。直後に「元に戻す」で取り消せます。
+            </div>
+          </section>
+        </div>
+      )}
+
+      {undoState && (
+        <div className="undo-toast" role="status" aria-live="polite">
+          <span className="undo-toast-message">{undoState.message}</span>
+          <button
+            className="button-secondary"
+            type="button"
+            onClick={performUndo}
+          >
+            元に戻す
+          </button>
+          <button
+            className="button-ghost undo-toast-close"
+            type="button"
+            onClick={dismissUndo}
+            aria-label="通知を閉じる"
+          >
+            ✕
+          </button>
         </div>
       )}
     </main>
@@ -1948,10 +2149,13 @@ function InputField({
   placeholder?: string;
   type?: string;
 }) {
+  const fieldId = useId();
+
   return (
     <div className="field">
-      <label>{label}</label>
+      <label htmlFor={fieldId}>{label}</label>
       <input
+        id={fieldId}
         type={type}
         value={value}
         onChange={(event) => onChange(event.target.value)}
@@ -1972,10 +2176,13 @@ function TextAreaField({
   onChange: (value: string) => void;
   placeholder?: string;
 }) {
+  const fieldId = useId();
+
   return (
     <div className="field">
-      <label>{label}</label>
+      <label htmlFor={fieldId}>{label}</label>
       <textarea
+        id={fieldId}
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
@@ -1995,10 +2202,16 @@ function SelectField({
   onChange: (value: string) => void;
   options: ReadonlyArray<{ value: string; label: string }>;
 }) {
+  const fieldId = useId();
+
   return (
     <div className="field">
-      <label>{label}</label>
-      <select value={value} onChange={(event) => onChange(event.target.value)}>
+      <label htmlFor={fieldId}>{label}</label>
+      <select
+        id={fieldId}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      >
         {options.map((option) => (
           <option key={option.value} value={option.value}>
             {option.label}
