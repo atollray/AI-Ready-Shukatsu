@@ -40,6 +40,21 @@ type WorkspaceMeta = {
   updatedAt: string;
 };
 
+/**
+ * 保存しようとした時点で、ディスク上のデータが「読み込んだ時点」から
+ * 別プロセス（AIエージェントによるファイル直接編集など）によって
+ * 更新されていた場合に投げる楽観ロックの衝突エラー。
+ */
+export class WorkspaceConflictError extends Error {
+  readonly currentUpdatedAt: string;
+
+  constructor(currentUpdatedAt: string) {
+    super("workspace conflict");
+    this.name = "WorkspaceConflictError";
+    this.currentUpdatedAt = currentUpdatedAt;
+  }
+}
+
 type UpcomingItem =
   | {
       source: "task";
@@ -1127,7 +1142,23 @@ export async function loadWorkspace(): Promise<WorkspaceData> {
   return ensureWorkspace();
 }
 
-export async function saveWorkspace(workspace: unknown): Promise<WorkspaceData> {
+export async function saveWorkspace(
+  workspace: unknown,
+  baseUpdatedAt?: string
+): Promise<WorkspaceData> {
+  await ensureDirectories();
+
+  // 楽観ロック: クライアントが読み込んだ時点の updatedAt (baseUpdatedAt) と
+  // 現在ディスクにある updatedAt が食い違う場合は、保存で他者の変更を
+  // 上書きしてしまうため衝突として扱う。baseUpdatedAt が未指定なら従来通り上書きする。
+  if (baseUpdatedAt) {
+    const meta = (await readJson(WORKSPACE_META_FILE)) as Partial<WorkspaceMeta> | null;
+    const diskUpdatedAt = typeof meta?.updatedAt === "string" ? meta.updatedAt : null;
+    if (diskUpdatedAt && diskUpdatedAt !== baseUpdatedAt) {
+      throw new WorkspaceConflictError(diskUpdatedAt);
+    }
+  }
+
   const normalized = normalizeWorkspace(workspace);
   normalized.updatedAt = new Date().toISOString();
   await writeSplitWorkspace(normalized);
