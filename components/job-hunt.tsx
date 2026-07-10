@@ -245,8 +245,17 @@ export function JobHunt({
   const [expandedNoteId, setExpandedNoteId] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const hydratedRef = useRef(false);
+  // 楽観ロック用: 「ディスクから読み込んだ時点」の updatedAt。
+  // 保存/再読込のたびに、ディスクの最新値へ更新する。
+  const baseUpdatedAtRef = useRef(initialWorkspace.updatedAt);
+  // 保存リクエストの応答が返るまでの間に編集されたかを判定するための最新 workspace 参照。
+  const workspaceRef = useRef(workspace);
   const deferredSearch = useDeferredValue(companySearch);
   const [theme, setTheme] = useState<"light" | "dark">("light");
+
+  useEffect(() => {
+    workspaceRef.current = workspace;
+  }, [workspace]);
 
   useEffect(() => {
     const isDark = document.documentElement.getAttribute("data-theme") === "dark";
@@ -524,6 +533,9 @@ export function JobHunt({
   }
 
   function saveToDisk() {
+    // 保存対象は「この時点」のスナップショット。応答が返るまでに編集された分は
+    // これと参照が変わるため、上書きせずに未保存として残す。
+    const snapshot = workspace;
     setSaveState("saving");
     setSaveMessage("保存中...");
 
@@ -532,18 +544,42 @@ export function JobHunt({
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(workspace),
+      body: JSON.stringify({
+        workspace: snapshot,
+        baseUpdatedAt: baseUpdatedAtRef.current,
+      }),
     })
       .then(async (response) => {
+        if (response.status === 409) {
+          // 楽観ロックの衝突: 読み込み後にディスク側（AIエージェント等）が更新済み。
+          setSaveState("error");
+          setSaveMessage(
+            "ディスク上のデータが外部（AIエージェント等）で更新されています。『再読込』で最新を取り込んでから、もう一度保存してください。"
+          );
+          return;
+        }
+
         if (!response.ok) {
           throw new Error("save failed");
         }
 
         const payload = (await response.json()) as { workspace: WorkspaceData };
+        // 次回保存の基準となるディスクの updatedAt を進める。
+        baseUpdatedAtRef.current = payload.workspace.updatedAt;
+
+        const editedDuringSave = workspaceRef.current !== snapshot;
         startTransition(() => {
-          setWorkspace(payload.workspace);
-          setSaveState("saved");
-          setSaveMessage("ファイルを更新しました。JSON / Markdown / ICS も同期済みです。");
+          if (editedDuringSave) {
+            // 保存中に加えられた編集を、サーバ応答で上書きしない。
+            setSaveState("dirty");
+            setSaveMessage(
+              "保存しました。保存中に加えた変更は未保存です。もう一度保存してください。"
+            );
+          } else {
+            setWorkspace(payload.workspace);
+            setSaveState("saved");
+            setSaveMessage("ファイルを更新しました。JSON / Markdown / ICS も同期済みです。");
+          }
         });
       })
       .catch(() => {
@@ -553,6 +589,16 @@ export function JobHunt({
   }
 
   function reloadFromDisk() {
+    // 未保存の変更があるまま再読込するとそれらが失われるため確認する。
+    if (
+      (saveState === "dirty" || saveState === "error") &&
+      !window.confirm(
+        "未保存の変更があります。ディスクの内容で上書きすると、これらの変更は失われます。続行しますか？"
+      )
+    ) {
+      return;
+    }
+
     setSaveState("saving");
     setSaveMessage("ディスクを読み込み中...");
 
@@ -563,6 +609,7 @@ export function JobHunt({
         }
 
         const payload = (await response.json()) as { workspace: WorkspaceData };
+        baseUpdatedAtRef.current = payload.workspace.updatedAt;
         startTransition(() => {
           setWorkspace(payload.workspace);
           setSelectedCompanyId(payload.workspace.companies[0]?.id || "");
