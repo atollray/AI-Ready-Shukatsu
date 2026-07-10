@@ -293,6 +293,8 @@ export function JobHunt({
     } finally {
       hydratedRef.current = true;
     }
+    // initialWorkspace はマウント時の初期スナップショットで不変のため依存に含めない（下書き復元は初回のみ実行する）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [startTransition]);
 
   useEffect(() => {
