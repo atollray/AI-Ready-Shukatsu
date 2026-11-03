@@ -1,12 +1,24 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { type ReactNode, createContext, useContext, useEffect, useState } from "react";
 import { type WorkspaceSnapshot, fetchWorkspace } from "./client";
 
 export const WORKSPACE_QUERY_KEY = ["workspace"];
 
 export type SaveStatus = "idle" | "saving" | "saved" | "conflict" | "error";
 
-export function useWorkspace() {
+interface WorkspaceContextType {
+  data: WorkspaceSnapshot | undefined;
+  isLoading: boolean;
+  error: Error | null;
+  refetch: () => Promise<any>;
+  saveStatus: SaveStatus;
+  setSaveStatus: (status: SaveStatus) => void;
+  lastSyncTime: string;
+}
+
+const WorkspaceContext = createContext<WorkspaceContextType | null>(null);
+
+export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [lastSyncTime, setLastSyncTime] = useState<string>("");
@@ -18,41 +30,45 @@ export function useWorkspace() {
       setLastSyncTime(new Date().toLocaleTimeString("ja-JP"));
       return data;
     },
-    staleTime: 1000 * 30, // 30s
+    staleTime: 1000 * 30,
   });
 
-  // Listen to SSE /api/events
   useEffect(() => {
     let eventSource: EventSource | null = null;
-
     try {
       eventSource = new EventSource("/api/events");
 
       eventSource.addEventListener("store-change", () => {
-        // Disk changed by external AI agent or another tab
         queryClient.invalidateQueries({ queryKey: WORKSPACE_QUERY_KEY });
         setSaveStatus("saved");
         setLastSyncTime(new Date().toLocaleTimeString("ja-JP"));
       });
-
-      eventSource.onerror = () => {
-        // browser will auto-reconnect
-      };
     } catch {
-      // ignore in environments without EventSource
+      // ignore
     }
 
     return () => {
-      if (eventSource) {
-        eventSource.close();
-      }
+      if (eventSource) eventSource.close();
     };
   }, [queryClient]);
 
-  return {
-    ...query,
+  const value: WorkspaceContextType = {
+    data: query.data,
+    isLoading: query.isLoading,
+    error: query.error as Error | null,
+    refetch: query.refetch,
     saveStatus,
     setSaveStatus,
     lastSyncTime,
   };
+
+  return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;
+}
+
+export function useWorkspace(): WorkspaceContextType {
+  const ctx = useContext(WorkspaceContext);
+  if (!ctx) {
+    throw new Error("useWorkspace must be used within a WorkspaceProvider");
+  }
+  return ctx;
 }

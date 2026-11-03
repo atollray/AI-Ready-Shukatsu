@@ -122,7 +122,31 @@ export class FsStore implements Store {
     await fs.mkdir(dir, { recursive: true });
     const tmpPath = path.join(dir, `.tmp_${Date.now()}_${Math.random().toString(36).slice(2)}`);
     await fs.writeFile(tmpPath, content, "utf8");
-    await fs.rename(tmpPath, filePath);
+
+    // Windows robustness: retry rename on EPERM/EBUSY with exponential/linear backoff
+    let retries = 10;
+    while (retries > 0) {
+      try {
+        await fs.rename(tmpPath, filePath);
+        return;
+      } catch (err: unknown) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if ((code === "EPERM" || code === "EBUSY" || code === "EACCES") && retries > 1) {
+          retries--;
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          continue;
+        }
+
+        // Final fallback: copyFile + unlink
+        try {
+          await fs.copyFile(tmpPath, filePath);
+          await fs.unlink(tmpPath).catch(() => {});
+          return;
+        } catch {
+          throw err;
+        }
+      }
+    }
   }
 
   private async atomicWriteJson(filePath: string, data: unknown): Promise<void> {

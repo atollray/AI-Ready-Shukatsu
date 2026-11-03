@@ -67,8 +67,13 @@ export async function startServer(options: ServerOptions = {}) {
   return { server, store, dataDir, port };
 }
 
+import { fileURLToPath } from "node:url";
+
 // Standalone execution
-if (import.meta.url === `file://${process.argv[1]}`) {
+const isMain =
+  process.argv[1] && path.resolve(fileURLToPath(import.meta.url)) === path.resolve(process.argv[1]);
+
+if (isMain) {
   startServer().catch((err) => {
     console.error("Server startup error:", err);
     process.exit(1);

@@ -13,6 +13,7 @@
     "build:node": "tsup",
     "build:web": "vite build",
     "test": "pnpm build:node && vitest run",
+    "test:e2e": "playwright test",
     "lint": "biome check src tests",
     "lint:fix": "biome check --write src tests",
     "format": "biome format --write src tests",
@@ -36,6 +37,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "1.9.4",
+    "@playwright/test": "^1.64.1",
     "@types/node": "^20.17.19",
     "@types/react": "^19.0.10",
     "@types/react-dom": "^19.0.4",
