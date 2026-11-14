@@ -1,4 +1,5 @@
 import type { ProfileData } from "@/core/client";
+import { AlertTriangle, Compass, Keyboard, Target, Trash2, User } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { clearSamplesApi, patchProfile } from "../../api/client";
 import { useWorkspace } from "../../api/use-workspace";
@@ -6,7 +7,7 @@ import { useWorkspace } from "../../api/use-workspace";
 export function SettingsPage() {
   const { data, isLoading, refetch, setSaveStatus } = useWorkspace();
   const [form, setForm] = useState<ProfileData | null>(null);
-  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (data?.profile) {
@@ -14,8 +15,20 @@ export function SettingsPage() {
     }
   }, [data?.profile]);
 
+  useEffect(() => {
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+    };
+  }, []);
+
   if (isLoading || !form) {
-    return <div style={{ padding: "40px", textAlign: "center" }}>設定を読み込み中...</div>;
+    return (
+      <div className="gh-empty">
+        <span>設定を読み込み中...</span>
+      </div>
+    );
   }
 
   const triggerAutoSave = (updated: ProfileData) => {
@@ -33,16 +46,15 @@ export function SettingsPage() {
       } catch {
         setSaveStatus("error");
       }
-    }, 800);
+    }, 650);
   };
 
   const updateField = <K extends keyof ProfileData>(field: K, value: ProfileData[K]) => {
-    const updated = { ...form, [field]: value };
-    triggerAutoSave(updated);
+    triggerAutoSave({ ...form, [field]: value });
   };
 
   const updateArrayField = (
-    field: "desiredRoles" | "desiredIndustries" | "strengths",
+    field: "desiredRoles" | "desiredIndustries" | "domainInterests" | "strengths" | "priorities",
     valueStr: string,
   ) => {
     const arr = valueStr
@@ -73,131 +85,259 @@ export function SettingsPage() {
   };
 
   return (
-    <div style={{ display: "grid", gap: "24px", maxWidth: "900px", margin: "0 auto" }}>
-      {/* Profile Form */}
-      <section className="card" style={{ padding: "24px", display: "grid", gap: "16px" }}>
-        <h2 style={{ margin: "0 0 8px 0", fontSize: "1.2rem" }}>👤 基本プロフィール & 就活軸</h2>
-        <p style={{ margin: 0, fontSize: "0.85rem", color: "var(--muted)" }}>
-          入力内容は自動保存され、AIエージェントが志望動機やESの下書きを生成する際の文脈（コンテキスト）として活用されます。
-        </p>
+    <div className="gh-stack" style={{ maxWidth: "920px", margin: "0 auto" }}>
+      {/* Basic Profile */}
+      <section className="card">
+        <div className="gh-box-header">
+          <h2 className="gh-box-title">
+            <User size={15} className="gh-muted" />
+            <span>基本プロフィール & 就活軸</span>
+          </h2>
+          <span className="gh-muted" style={{ fontSize: "12px" }}>
+            AIコンテキストとして自動連携
+          </span>
+        </div>
 
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
-            gap: "14px",
-          }}
-        >
-          <div>
-            <label style={{ fontSize: "0.85rem", fontWeight: 600 }}>氏名:</label>
+        <div className="gh-box-body gh-stack">
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+              gap: "12px",
+            }}
+          >
+            <div className="gh-field">
+              <label className="gh-field-label">氏名</label>
+              <input
+                type="text"
+                value={form.name}
+                onChange={(e) => updateField("name", e.target.value)}
+                placeholder="例: 就活 太郎"
+              />
+            </div>
+
+            <div className="gh-field">
+              <label className="gh-field-label">大学・学部・専攻</label>
+              <input
+                type="text"
+                value={form.school}
+                onChange={(e) => updateField("school", e.target.value)}
+                placeholder="例: ○○大学 工学部 情報工学科"
+              />
+            </div>
+
+            <div className="gh-field">
+              <label className="gh-field-label">卒業年</label>
+              <input
+                type="text"
+                value={form.graduationYear}
+                onChange={(e) => updateField("graduationYear", e.target.value)}
+                placeholder="例: 2027年卒"
+              />
+            </div>
+          </div>
+
+          <div className="gh-2col-equal">
+            <div className="gh-field">
+              <label className="gh-field-label">志望職種（カンマ区切り）</label>
+              <input
+                type="text"
+                value={form.desiredRoles.join(", ")}
+                onChange={(e) => updateArrayField("desiredRoles", e.target.value)}
+                placeholder="例: Webエンジニア, PdM, データサイエンティスト"
+              />
+            </div>
+
+            <div className="gh-field">
+              <label className="gh-field-label">志望業界（カンマ区切り）</label>
+              <input
+                type="text"
+                value={form.desiredIndustries.join(", ")}
+                onChange={(e) => updateArrayField("desiredIndustries", e.target.value)}
+                placeholder="例: BtoB SaaS, クラウド, ITコンサル"
+              />
+            </div>
+          </div>
+
+          <div className="gh-2col-equal">
+            <div className="gh-field">
+              <label className="gh-field-label">興味領域（カンマ区切り）</label>
+              <input
+                type="text"
+                value={form.domainInterests.join(", ")}
+                onChange={(e) => updateArrayField("domainInterests", e.target.value)}
+                placeholder="例: 開発者体験, 生成AI, EdTech"
+              />
+            </div>
+
+            <div className="gh-field">
+              <label className="gh-field-label">優先する価値観（カンマ区切り）</label>
+              <input
+                type="text"
+                value={form.priorities.join(", ")}
+                onChange={(e) => updateArrayField("priorities", e.target.value)}
+                placeholder="例: 技術的挑戦, 裁量, 自社プロダクト"
+              />
+            </div>
+          </div>
+
+          <div className="gh-field">
+            <label className="gh-field-label">
+              アピールしたい強み・学生時代注力したこと（カンマ区切り）
+            </label>
             <input
               type="text"
-              value={form.name}
-              onChange={(e) => updateField("name", e.target.value)}
-              style={{ width: "100%", padding: "6px 10px", marginTop: "4px" }}
-              placeholder="例: 就活 太郎"
+              value={form.strengths.join(", ")}
+              onChange={(e) => updateArrayField("strengths", e.target.value)}
+              placeholder="例: 自走力, ハッカソン最優秀賞, チーム推進力"
             />
           </div>
 
-          <div>
-            <label style={{ fontSize: "0.85rem", fontWeight: 600 }}>大学・学部・専攻:</label>
+          <div className="gh-field">
+            <label className="gh-field-label">希望する働き方・環境</label>
             <input
               type="text"
-              value={form.school}
-              onChange={(e) => updateField("school", e.target.value)}
-              style={{ width: "100%", padding: "6px 10px", marginTop: "4px" }}
-              placeholder="例: ○○大学 工学部 情報工学科"
+              value={form.workingPreferences}
+              onChange={(e) => updateField("workingPreferences", e.target.value)}
+              placeholder="例: フレックス・ハイブリッド勤務、コードレビュー文化"
             />
           </div>
-
-          <div>
-            <label style={{ fontSize: "0.85rem", fontWeight: 600 }}>卒業年:</label>
-            <input
-              type="text"
-              value={form.graduationYear}
-              onChange={(e) => updateField("graduationYear", e.target.value)}
-              style={{ width: "100%", padding: "6px 10px", marginTop: "4px" }}
-              placeholder="例: 2027年卒"
-            />
-          </div>
-        </div>
-
-        <div>
-          <label style={{ fontSize: "0.85rem", fontWeight: 600 }}>志望職種 (カンマ区切り):</label>
-          <input
-            type="text"
-            value={form.desiredRoles.join(", ")}
-            onChange={(e) => updateArrayField("desiredRoles", e.target.value)}
-            style={{ width: "100%", padding: "6px 10px", marginTop: "4px" }}
-            placeholder="例: Webエンジニア, PdM, データサイエンティスト"
-          />
-        </div>
-
-        <div>
-          <label style={{ fontSize: "0.85rem", fontWeight: 600 }}>志望業界 (カンマ区切り):</label>
-          <input
-            type="text"
-            value={form.desiredIndustries.join(", ")}
-            onChange={(e) => updateArrayField("desiredIndustries", e.target.value)}
-            style={{ width: "100%", padding: "6px 10px", marginTop: "4px" }}
-            placeholder="例: BtoB SaaS, クラウド, ITコンサル"
-          />
-        </div>
-
-        <div>
-          <label style={{ fontSize: "0.85rem", fontWeight: 600 }}>
-            アピールしたい強み・学生時代注力したこと (カンマ区切り):
-          </label>
-          <input
-            type="text"
-            value={form.strengths.join(", ")}
-            onChange={(e) => updateArrayField("strengths", e.target.value)}
-            style={{ width: "100%", padding: "6px 10px", marginTop: "4px" }}
-            placeholder="例: 自走力, ハッカソン最優秀賞, チーム推進力"
-          />
-        </div>
-
-        <div>
-          <label style={{ fontSize: "0.85rem", fontWeight: 600 }}>
-            今週のフォーカス・重点課題:
-          </label>
-          <textarea
-            rows={3}
-            value={form.weeklyFocus}
-            onChange={(e) => updateField("weeklyFocus", e.target.value)}
-            style={{ width: "100%", padding: "8px 10px", marginTop: "4px" }}
-            placeholder="例: ○○社の2次面接準備と逆質問の整理、WEBテスト非言語の復習"
-          />
-        </div>
-
-        <div>
-          <label style={{ fontSize: "0.85rem", fontWeight: 600 }}>就活全体のメモ・ポリシー:</label>
-          <textarea
-            rows={2}
-            value={form.memo}
-            onChange={(e) => updateField("memo", e.target.value)}
-            style={{ width: "100%", padding: "8px 10px", marginTop: "4px" }}
-          />
         </div>
       </section>
 
-      {/* Sample Data Management */}
-      <section className="card" style={{ padding: "24px" }}>
-        <h2 style={{ margin: "0 0 8px 0", fontSize: "1.2rem" }}>🧪 サンプルデータの管理</h2>
-        <p style={{ margin: 0, fontSize: "0.85rem", color: "var(--muted)" }}>
-          初期状態では体験用のサンプルデータ（2社、タスク、ノート）が登録されています。
-          ご自身のデータを登録し始める際に、以下のボタンからサンプルだけを一括削除できます。
-        </p>
+      {/* Career Vision & Weekly Focus */}
+      <section className="card">
+        <div className="gh-box-header">
+          <h2 className="gh-box-title">
+            <Compass size={15} className="gh-muted" />
+            <span>キャリアビジョン & 今週のフォーカス</span>
+          </h2>
+        </div>
 
-        <div style={{ marginTop: "16px" }}>
+        <div className="gh-box-body gh-stack">
+          <div className="gh-field">
+            <label className="gh-field-label gh-row-gap" style={{ gap: "5px" }}>
+              <Target size={13} style={{ color: "var(--accent-fg)" }} />
+              <span>今週のフォーカス・重点課題</span>
+            </label>
+            <textarea
+              rows={3}
+              value={form.weeklyFocus}
+              onChange={(e) => updateField("weeklyFocus", e.target.value)}
+              placeholder="例: ○○社の2次面接準備と逆質問の整理、WEBテスト非言語の復習"
+            />
+          </div>
+
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+              gap: "12px",
+            }}
+          >
+            <div className="gh-field">
+              <label className="gh-field-label">短期ビジョン（1〜2年）</label>
+              <textarea
+                rows={2}
+                value={form.careerVision.shortTerm}
+                onChange={(e) =>
+                  updateField("careerVision", {
+                    ...form.careerVision,
+                    shortTerm: e.target.value,
+                  })
+                }
+                placeholder="入社後の目標"
+              />
+            </div>
+
+            <div className="gh-field">
+              <label className="gh-field-label">中期ビジョン（3〜5年）</label>
+              <textarea
+                rows={2}
+                value={form.careerVision.midTerm}
+                onChange={(e) =>
+                  updateField("careerVision", {
+                    ...form.careerVision,
+                    midTerm: e.target.value,
+                  })
+                }
+                placeholder="技術リードやPdMなど"
+              />
+            </div>
+
+            <div className="gh-field">
+              <label className="gh-field-label">長期ビジョン</label>
+              <textarea
+                rows={2}
+                value={form.careerVision.longTerm}
+                onChange={(e) =>
+                  updateField("careerVision", {
+                    ...form.careerVision,
+                    longTerm: e.target.value,
+                  })
+                }
+                placeholder="目指すエンジニア像"
+              />
+            </div>
+          </div>
+
+          <div className="gh-field">
+            <label className="gh-field-label">就活全体のメモ・ポリシー</label>
+            <textarea
+              rows={2}
+              value={form.memo}
+              onChange={(e) => updateField("memo", e.target.value)}
+              placeholder="選考の判断軸や記録ポリシー"
+            />
+          </div>
+        </div>
+      </section>
+
+      {/* Keyboard Shortcuts */}
+      <section className="card">
+        <div className="gh-box-header">
+          <h2 className="gh-box-title">
+            <Keyboard size={15} className="gh-muted" />
+            <span>キーボードショートカット</span>
+          </h2>
+        </div>
+        <div className="gh-box-body gh-row-gap" style={{ gap: "20px", fontSize: "13px" }}>
+          <div className="gh-row-gap">
+            <span className="gh-kbd">⌘K</span>
+            <span className="gh-muted">/</span>
+            <span className="gh-kbd">Ctrl+K</span>
+            <span>クイック移動パレットを開く</span>
+          </div>
+          <div className="gh-row-gap">
+            <span className="gh-kbd">/</span>
+            <span>企業一覧の検索ボックスにフォーカス</span>
+          </div>
+        </div>
+      </section>
+
+      {/* Danger Zone: Sample Data Management */}
+      <section className="card" style={{ borderColor: "var(--danger-muted)" }}>
+        <div className="gh-box-header">
+          <h2 className="gh-box-title" style={{ color: "var(--danger-fg)" }}>
+            <AlertTriangle size={15} />
+            <span>サンプルデータの管理 (Danger Zone)</span>
+          </h2>
+        </div>
+        <div className="gh-box-body gh-row-between">
+          <p className="gh-muted" style={{ margin: 0, fontSize: "13px", maxWidth: "60ch" }}>
+            初期状態では体験用のサンプルデータ（2社、タスク、ノート）が登録されています。ご自身のデータを登録し始める際に、サンプルだけを一括削除できます。
+          </p>
+
           <button
             type="button"
-            className="button-ghost"
-            style={{ color: "var(--danger)", border: "1px solid var(--danger)" }}
+            className="button-danger"
             onClick={handleClearSample}
             disabled={!hasSampleData}
           >
-            {hasSampleData ? "🗑️ サンプルデータをすべて削除する" : "✓ サンプルデータはありません"}
+            <Trash2 size={14} />
+            <span>
+              {hasSampleData ? "サンプルデータをすべて削除する" : "サンプルデータはありません"}
+            </span>
           </button>
         </div>
       </section>

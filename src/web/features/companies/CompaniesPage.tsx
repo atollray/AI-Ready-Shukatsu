@@ -1,50 +1,99 @@
 import { type Company, type CompanyStage, generateId } from "@/core/client";
-import { useMemo, useState } from "react";
+import { ArrowUpDown, Building2, Search, Star, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
 import { createCompany, deleteCompanyApi } from "../../api/client";
 import { useWorkspace } from "../../api/use-workspace";
+import { STAGE_LIST, STAGE_MAP } from "../../constants/meta";
 import { CompanyDetail } from "./CompanyDetail";
 
-const STAGE_OPTIONS: { value: CompanyStage; label: string }[] = [
-  { value: "wishlist", label: "気になる" },
-  { value: "researching", label: "企業調査中" },
-  { value: "applied", label: "応募・ES中" },
-  { value: "interview", label: "面接中" },
-  { value: "offer", label: "内定" },
-  { value: "paused", label: "保留" },
-  { value: "rejected", label: "お見送り" },
-];
+type SortKey = "score" | "updated" | "name";
 
 export function CompaniesPage() {
   const { data, isLoading, refetch, setSaveStatus } = useWorkspace();
   const [searchParams, setSearchParams] = useSearchParams();
   const [search, setSearch] = useState("");
-  const [selectedStage, setSelectedStage] = useState<string>("all");
+  const [sortBy, setSortBy] = useState<SortKey>("score");
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
+  const selectedStage = searchParams.get("stage") || "all";
   const companies = data?.companies || [];
-  const selectedId = searchParams.get("selected") || companies[0]?.id || "";
 
   const filteredCompanies = useMemo(() => {
-    return companies.filter((c) => {
+    const filtered = companies.filter((c) => {
+      const q = search.trim().toLowerCase();
       const matchSearch =
-        !search ||
-        c.name.toLowerCase().includes(search.toLowerCase()) ||
-        c.industry.toLowerCase().includes(search.toLowerCase()) ||
-        c.tags.some((t) => t.toLowerCase().includes(search.toLowerCase()));
+        !q ||
+        c.name.toLowerCase().includes(q) ||
+        c.industry.toLowerCase().includes(q) ||
+        c.currentTrack.toLowerCase().includes(q) ||
+        c.tags.some((t) => t.toLowerCase().includes(q));
 
       const matchStage = selectedStage === "all" || c.stage === selectedStage;
       return matchSearch && matchStage;
     });
-  }, [companies, search, selectedStage]);
+
+    return [...filtered].sort((a, b) => {
+      if (sortBy === "name") return a.name.localeCompare(b.name, "ja");
+      if (sortBy === "updated") return b.updatedAt.localeCompare(a.updatedAt);
+      const scoreDiff = b.interestScore + b.fitScore - (a.interestScore + a.fitScore);
+      if (scoreDiff !== 0) return scoreDiff;
+      return b.updatedAt.localeCompare(a.updatedAt);
+    });
+  }, [companies, search, selectedStage, sortBy]);
+
+  const rawSelectedId = searchParams.get("selected");
+  const selectedId =
+    rawSelectedId && companies.some((c) => c.id === rawSelectedId)
+      ? rawSelectedId
+      : filteredCompanies[0]?.id || companies[0]?.id || "";
 
   const selectedCompany = companies.find((c) => c.id === selectedId) || null;
 
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (
+        e.key === "/" &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        document.activeElement?.tagName !== "INPUT" &&
+        document.activeElement?.tagName !== "TEXTAREA" &&
+        document.activeElement?.tagName !== "SELECT"
+      ) {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, []);
+
+  const updateParams = (patch: { selected?: string | null; stage?: string | null }) => {
+    const next = new URLSearchParams(searchParams);
+    if (patch.selected !== undefined) {
+      if (patch.selected) next.set("selected", patch.selected);
+      else next.delete("selected");
+    }
+    if (patch.stage !== undefined) {
+      if (patch.stage && patch.stage !== "all") next.set("stage", patch.stage);
+      else next.delete("stage");
+    }
+    setSearchParams(next);
+  };
+
   const handleSelectCompany = (id: string) => {
-    setSearchParams({ selected: id });
+    updateParams({ selected: id });
+  };
+
+  const handleStageFilter = (stage: string) => {
+    updateParams({ stage });
   };
 
   const handleCreateCompany = async () => {
     const now = new Date().toISOString();
+    const initialStage: CompanyStage =
+      selectedStage !== "all" ? (selectedStage as CompanyStage) : "researching";
     const newCo: Company = {
       id: generateId("co"),
       rev: 1,
@@ -55,14 +104,14 @@ export function CompaniesPage() {
       headquarters: "",
       urls: { careers: "", application: "" },
       tags: [],
-      stage: "researching",
+      stage: initialStage,
       currentTrack: "本選考",
       stageHistory: [
         {
           at: now,
           track: "本選考",
           from: "wishlist",
-          to: "researching",
+          to: initialStage,
         },
       ],
       interestScore: 3,
@@ -81,7 +130,7 @@ export function CompaniesPage() {
     try {
       const saved = await createCompany(newCo);
       await refetch();
-      setSearchParams({ selected: saved.id });
+      updateParams({ selected: saved.id });
     } catch (err) {
       alert("企業の作成に失敗しました: " + (err as Error).message);
     }
@@ -92,139 +141,213 @@ export function CompaniesPage() {
       await deleteCompanyApi(id);
       await refetch();
       const remaining = companies.filter((c) => c.id !== id);
-      if (remaining.length > 0) {
-        setSearchParams({ selected: remaining[0]!.id });
-      } else {
-        setSearchParams({});
-      }
+      updateParams({ selected: remaining[0]?.id || null });
     } catch (err) {
       alert("企業の削除に失敗しました: " + (err as Error).message);
     }
   };
 
   if (isLoading || !data) {
-    return <div style={{ padding: "40px", textAlign: "center" }}>企業データを読み込み中...</div>;
+    return (
+      <div className="gh-empty">
+        <span>企業データを読み込み中...</span>
+      </div>
+    );
   }
 
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "minmax(280px, 340px) 1fr",
-        gap: "24px",
-        alignItems: "start",
-      }}
-    >
-      {/* Left Column: Company List */}
-      <div style={{ display: "grid", gap: "12px" }}>
-        <div style={{ display: "flex", gap: "8px" }}>
-          <input
-            type="text"
-            placeholder="企業名・業界・タグで検索"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            style={{ flex: 1, padding: "8px 12px", borderRadius: "var(--radius-md)" }}
-          />
-          <button
-            type="button"
-            className="button-primary"
-            onClick={handleCreateCompany}
-            style={{ whiteSpace: "nowrap", padding: "8px 14px" }}
-          >
-            + 追加
-          </button>
-        </div>
+    <div className="gh-master-detail">
+      {/* Left Sidebar: Company Directory */}
+      <aside className="card">
+        <div className="gh-box-header" style={{ padding: "10px 12px" }}>
+          <div className="gh-row-gap" style={{ width: "100%" }}>
+            <div style={{ position: "relative", flex: 1, minWidth: 0 }}>
+              <Search
+                size={14}
+                className="gh-muted"
+                style={{
+                  position: "absolute",
+                  left: "9px",
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  pointerEvents: "none",
+                }}
+              />
+              <input
+                ref={searchInputRef}
+                type="text"
+                placeholder="企業名・業界・タグで検索"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                style={{
+                  width: "100%",
+                  paddingLeft: "28px",
+                  paddingRight: search ? "26px" : "10px",
+                }}
+              />
+              {search ? (
+                <button
+                  type="button"
+                  onClick={() => setSearch("")}
+                  aria-label="検索をクリア"
+                  style={{
+                    position: "absolute",
+                    right: "6px",
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    background: "none",
+                    border: "none",
+                    padding: "2px",
+                    display: "inline-flex",
+                    color: "var(--fg-muted)",
+                  }}
+                >
+                  <X size={13} />
+                </button>
+              ) : null}
+            </div>
+            <button
+              type="button"
+              className="button-primary btn-sm"
+              onClick={handleCreateCompany}
+              style={{ height: "32px" }}
+            >
+              + 追加
+            </button>
+          </div>
 
-        {/* Stage Filter */}
-        <div style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
-          <button
-            type="button"
-            className={`button-ghost ${selectedStage === "all" ? "button-primary" : ""}`}
-            style={{ fontSize: "0.78rem", padding: "4px 8px" }}
-            onClick={() => setSelectedStage("all")}
-          >
-            すべて ({companies.length})
-          </button>
-          {STAGE_OPTIONS.map((st) => {
-            const count = companies.filter((c) => c.stage === st.value).length;
-            if (count === 0 && selectedStage !== st.value) return null;
-            return (
+          {/* Stage Filter & Sort */}
+          <div style={{ width: "100%", display: "grid", gap: "8px", marginTop: "4px" }}>
+            <div className="gh-filter-pills">
               <button
-                key={st.value}
                 type="button"
-                className={`button-ghost ${selectedStage === st.value ? "button-primary" : ""}`}
-                style={{ fontSize: "0.78rem", padding: "4px 8px" }}
-                onClick={() => setSelectedStage(st.value)}
+                className={`gh-filter-pill ${selectedStage === "all" ? "active" : ""}`}
+                onClick={() => handleStageFilter("all")}
               >
-                {st.label} ({count})
+                すべて ({companies.length})
               </button>
-            );
-          })}
+              {STAGE_LIST.map((st) => {
+                const count = companies.filter((c) => c.stage === st.value).length;
+                if (count === 0 && selectedStage !== st.value) return null;
+                return (
+                  <button
+                    key={st.value}
+                    type="button"
+                    className={`gh-filter-pill ${selectedStage === st.value ? "active" : ""}`}
+                    onClick={() => handleStageFilter(st.value)}
+                  >
+                    <span
+                      className="gh-dot"
+                      style={{ backgroundColor: st.dotColor, width: "6px", height: "6px" }}
+                    />
+                    <span>
+                      {st.shortLabel} ({count})
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="gh-row-between" style={{ fontSize: "12px" }}>
+              <span className="gh-muted">{filteredCompanies.length} 社表示</span>
+              <label className="gh-row-gap gh-muted" style={{ gap: "4px" }}>
+                <ArrowUpDown size={12} />
+                <select
+                  aria-label="並び替え"
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value as SortKey)}
+                  style={{ padding: "2px 6px", fontSize: "12px", height: "24px" }}
+                >
+                  <option value="score">志望度・マッチ順</option>
+                  <option value="updated">更新日時順</option>
+                  <option value="name">企業名順</option>
+                </select>
+              </label>
+            </div>
+          </div>
         </div>
 
-        {/* List items */}
-        <div
-          style={{
-            display: "grid",
-            gap: "8px",
-            maxHeight: "calc(100vh - 260px)",
-            overflowY: "auto",
-            paddingRight: "4px",
-          }}
-        >
+        <div className="gh-sidebar-list">
           {filteredCompanies.length === 0 ? (
-            <p style={{ color: "var(--muted)", fontSize: "0.88rem", padding: "16px 0" }}>
-              一致する企業はありません。
-            </p>
+            <div className="gh-empty" style={{ padding: "28px 16px" }}>
+              <Building2 size={20} className="gh-subtle" />
+              <span style={{ fontSize: "13px" }}>一致する企業はありません。</span>
+            </div>
           ) : (
             filteredCompanies.map((c) => {
               const isSelected = c.id === selectedId;
+              const stageMeta = STAGE_MAP[c.stage] || STAGE_MAP.researching;
               return (
-                <div
+                <button
                   key={c.id}
+                  type="button"
                   onClick={() => handleSelectCompany(c.id)}
-                  style={{
-                    padding: "12px 14px",
-                    background: isSelected ? "var(--surface-strong)" : "var(--surface)",
-                    border: isSelected ? "2px solid var(--accent)" : "1px solid var(--line)",
-                    borderRadius: "var(--radius-md)",
-                    cursor: "pointer",
-                    transition: "all 0.15s ease",
-                  }}
+                  className={`gh-list-item ${isSelected ? "selected" : ""}`}
                 >
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                    }}
-                  >
-                    <span style={{ fontWeight: 700, fontSize: "0.95rem" }}>{c.name}</span>
-                    <span style={{ fontSize: "0.75rem", color: "var(--muted)" }}>
-                      ★{c.interestScore}
+                  <div className="gh-row-between" style={{ width: "100%", flexWrap: "nowrap" }}>
+                    <span
+                      className="gh-row-gap"
+                      style={{ gap: "7px", minWidth: 0, flexWrap: "nowrap" }}
+                    >
+                      <span
+                        className="gh-dot"
+                        style={{ backgroundColor: stageMeta.dotColor }}
+                        title={stageMeta.label}
+                      />
+                      <span
+                        style={{
+                          fontWeight: 600,
+                          fontSize: "13px",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {c.name}
+                      </span>
+                    </span>
+                    <span
+                      className="gh-row-gap gh-muted mono"
+                      style={{ gap: "2px", fontSize: "11px", flexShrink: 0 }}
+                    >
+                      <Star size={11} style={{ color: "var(--attention-fg)" }} />
+                      <span>{c.interestScore}</span>
                     </span>
                   </div>
+
                   <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      marginTop: "4px",
-                      fontSize: "0.8rem",
-                      color: "var(--muted)",
-                    }}
+                    className="gh-row-between gh-muted"
+                    style={{ width: "100%", fontSize: "12px", paddingLeft: "15px" }}
                   >
-                    <span>{c.industry || "業界未設定"}</span>
-                    <span>{c.currentTrack}</span>
+                    <span
+                      style={{
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {c.industry || "業界未設定"}
+                    </span>
+                    <span style={{ flexShrink: 0, fontSize: "11px" }}>{c.currentTrack}</span>
                   </div>
-                </div>
+
+                  {(c.esEntries.length > 0 || c.events.length > 0) && (
+                    <div
+                      className="gh-row-gap gh-subtle"
+                      style={{ fontSize: "11px", paddingLeft: "15px" }}
+                    >
+                      {c.esEntries.length > 0 ? <span>ES {c.esEntries.length}</span> : null}
+                      {c.events.length > 0 ? <span>予定 {c.events.length}</span> : null}
+                    </div>
+                  )}
+                </button>
               );
             })
           )}
         </div>
-      </div>
+      </aside>
 
-      {/* Right Column: Company Detail */}
+      {/* Right Main Pane: Company Detail */}
       <div>
         {selectedCompany ? (
           <CompanyDetail
@@ -235,11 +358,9 @@ export function CompaniesPage() {
             setSaveStatus={setSaveStatus}
           />
         ) : (
-          <div
-            className="card"
-            style={{ padding: "40px", textAlign: "center", color: "var(--muted)" }}
-          >
-            企業を選択するか、左上の「+ 追加」ボタンから新しい企業を追加してください。
+          <div className="card gh-empty" style={{ padding: "56px 24px" }}>
+            <Building2 size={28} className="gh-subtle" />
+            <span>企業を選択するか、左上の「+ 追加」ボタンから新しい企業を追加してください。</span>
           </div>
         )}
       </div>

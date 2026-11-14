@@ -152,4 +152,47 @@ test.describe("AI-Ready Shukatsu 実ブラウザ E2E 機能テスト", () => {
     // The browser page should automatically receive the SSE change event and render the new company
     await expect(page.locator(`text=${uniqueCoName}`).first()).toBeVisible({ timeout: 6000 });
   });
+
+  test("8. クイック移動パレット: コマンドパレットでページと企業へ遷移できること", async ({
+    page,
+  }) => {
+    await page.locator("button.gh-cmd-trigger").click();
+    const cmdInput = page.locator("input[placeholder='ページ・企業・ノートを検索して移動...']");
+    await expect(cmdInput).toBeVisible();
+
+    await cmdInput.fill("テックフロンティア");
+    await page.locator(".gh-cmd-item", { hasText: "テックフロンティア株式会社" }).first().click();
+
+    await expect(page).toHaveURL(/\/companies\?selected=/);
+    await expect(page.locator("input[placeholder='企業名を入力']")).toHaveValue(
+      "テックフロンティア株式会社",
+    );
+  });
+
+  test("9. テーマ切替とノートMarkdownプレビュー・企業詳細連絡先タブの動作確認", async ({
+    page,
+  }) => {
+    // Theme toggle
+    const themeBtn = page.locator("button[aria-label*='テーマに切り替え']");
+    await themeBtn.click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    await page.locator("button[aria-label*='テーマに切り替え']").click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+
+    // Notes Markdown preview
+    await page.goto("/notes");
+    await page.locator("button:has-text('+ 追加')").click();
+    await page
+      .locator("textarea[placeholder*='面接の振り返り']")
+      .fill("## テスト見出し\n- 箇条書き項目");
+    await page.locator("button:has-text('Preview')").click();
+    await expect(page.locator(".gh-markdown h2")).toHaveText("テスト見出し");
+
+    // Company contacts & documents tab
+    await page.goto("/companies");
+    await page.locator("button[role='tab']:has-text('連絡先・資料')").click();
+    await page.locator("button:has-text('連絡先を追加')").click();
+    await expect(page.locator("input[placeholder='氏名']").last()).toBeVisible();
+    await expect(page.locator("input[placeholder='氏名']").last()).toHaveValue("");
+  });
 });

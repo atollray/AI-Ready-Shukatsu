@@ -1,37 +1,63 @@
 import { type TaskItem, type TaskState, generateId } from "@/core/client";
+import {
+  Building2,
+  Calendar,
+  CheckCircle2,
+  Circle,
+  Clock,
+  Edit3,
+  Search,
+  Trash2,
+} from "lucide-react";
 import { useMemo, useState } from "react";
 import { createTask, deleteTaskApi, patchTask } from "../../api/client";
 import { useWorkspace } from "../../api/use-workspace";
+import { TASK_STATE_META, formatRelativeDate } from "../../constants/meta";
 
 export function TasksPage() {
   const { data, isLoading, refetch, setSaveStatus } = useWorkspace();
   const [stateFilter, setStateFilter] = useState<"all" | "open" | "done">("open");
   const [companyFilter, setCompanyFilter] = useState<string>("all");
+  const [search, setSearch] = useState("");
   const [newTitle, setNewTitle] = useState("");
   const [newDue, setNewDue] = useState("");
   const [newCompanyId, setNewCompanyId] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   const tasks = data?.tasks || [];
   const companies = data?.companies || [];
   const companyMap = useMemo(() => new Map(companies.map((c) => [c.id, c.name])), [companies]);
 
   const filteredTasks = useMemo(() => {
+    const q = search.trim().toLowerCase();
     return tasks.filter((t) => {
       const matchState =
         stateFilter === "all" ||
         (stateFilter === "open" && t.state !== "done") ||
         (stateFilter === "done" && t.state === "done");
-
       const matchCompany = companyFilter === "all" || t.companyId === companyFilter;
-      return matchState && matchCompany;
+      const matchSearch =
+        !q || t.title.toLowerCase().includes(q) || t.notes.toLowerCase().includes(q);
+      return matchState && matchCompany && matchSearch;
     });
-  }, [tasks, stateFilter, companyFilter]);
+  }, [tasks, stateFilter, companyFilter, search]);
 
   const handleToggleState = async (task: TaskItem) => {
     const nextState: TaskState = task.state === "done" ? "todo" : "done";
     setSaveStatus("saving");
     try {
       await patchTask(task.id, { state: nextState }, task.rev);
+      await refetch();
+      setSaveStatus("saved");
+    } catch {
+      setSaveStatus("error");
+    }
+  };
+
+  const handlePatchTask = async (task: TaskItem, patch: Partial<TaskItem>) => {
+    setSaveStatus("saving");
+    try {
+      await patchTask(task.id, patch, task.rev);
       await refetch();
       setSaveStatus("saved");
     } catch {
@@ -71,6 +97,7 @@ export function TasksPage() {
   const handleDeleteTask = async (id: string) => {
     try {
       await deleteTaskApi(id);
+      if (editingId === id) setEditingId(null);
       await refetch();
     } catch (err) {
       alert("タスクの削除に失敗しました: " + (err as Error).message);
@@ -78,166 +105,304 @@ export function TasksPage() {
   };
 
   if (isLoading || !data) {
-    return <div style={{ padding: "40px", textAlign: "center" }}>タスクデータを読み込み中...</div>;
+    return (
+      <div className="gh-empty">
+        <span>タスクデータを読み込み中...</span>
+      </div>
+    );
   }
 
-  return (
-    <div style={{ display: "grid", gap: "20px" }}>
-      {/* Create Task Bar */}
-      <form
-        onSubmit={handleCreateTask}
-        className="card"
-        style={{
-          padding: "16px",
-          display: "flex",
-          gap: "12px",
-          alignItems: "center",
-          flexWrap: "wrap",
-        }}
-      >
-        <input
-          type="text"
-          placeholder="新しいタスクを入力..."
-          value={newTitle}
-          onChange={(e) => setNewTitle(e.target.value)}
-          style={{
-            flex: 1,
-            minWidth: "200px",
-            padding: "8px 12px",
-            borderRadius: "var(--radius-md)",
-          }}
-        />
-        <input
-          type="date"
-          value={newDue}
-          onChange={(e) => setNewDue(e.target.value)}
-          style={{ padding: "7px 10px", borderRadius: "var(--radius-md)" }}
-        />
-        <select
-          value={newCompanyId}
-          onChange={(e) => setNewCompanyId(e.target.value)}
-          style={{ padding: "7px 10px", borderRadius: "var(--radius-md)", maxWidth: "180px" }}
-        >
-          <option value="">関連企業なし (共通)</option>
-          {companies.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name}
-            </option>
-          ))}
-        </select>
-        <button type="submit" className="button-primary" style={{ padding: "8px 16px" }}>
-          + タスク追加
-        </button>
-      </form>
+  const openCount = tasks.filter((t) => t.state !== "done").length;
+  const doneCount = tasks.filter((t) => t.state === "done").length;
 
-      {/* Filter Controls */}
-      <div style={{ display: "flex", gap: "16px", alignItems: "center", flexWrap: "wrap" }}>
-        <div style={{ display: "flex", gap: "6px" }}>
-          <button
-            type="button"
-            className={`button-ghost ${stateFilter === "open" ? "button-primary" : ""}`}
-            style={{ fontSize: "0.85rem", padding: "4px 12px" }}
-            onClick={() => setStateFilter("open")}
+  return (
+    <div className="gh-stack">
+      {/* Quick Add Task Bar */}
+      <form onSubmit={handleCreateTask} className="card gh-box-body">
+        <div className="gh-row-gap" style={{ width: "100%" }}>
+          <input
+            type="text"
+            placeholder="新しいタスクを入力..."
+            value={newTitle}
+            onChange={(e) => setNewTitle(e.target.value)}
+            style={{ flex: 1, minWidth: "220px" }}
+          />
+          <input
+            type="date"
+            aria-label="期限"
+            value={newDue}
+            onChange={(e) => setNewDue(e.target.value)}
+          />
+          <select
+            aria-label="関連企業"
+            value={newCompanyId}
+            onChange={(e) => setNewCompanyId(e.target.value)}
+            style={{ maxWidth: "200px" }}
           >
-            未完了 ({tasks.filter((t) => t.state !== "done").length})
-          </button>
-          <button
-            type="button"
-            className={`button-ghost ${stateFilter === "all" ? "button-primary" : ""}`}
-            style={{ fontSize: "0.85rem", padding: "4px 12px" }}
-            onClick={() => setStateFilter("all")}
-          >
-            すべて ({tasks.length})
-          </button>
-          <button
-            type="button"
-            className={`button-ghost ${stateFilter === "done" ? "button-primary" : ""}`}
-            style={{ fontSize: "0.85rem", padding: "4px 12px" }}
-            onClick={() => setStateFilter("done")}
-          >
-            完了済み ({tasks.filter((t) => t.state === "done").length})
+            <option value="">関連企業なし (共通)</option>
+            {companies.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+          <button type="submit" className="button-primary">
+            + タスク追加
           </button>
         </div>
+      </form>
 
-        <select
-          value={companyFilter}
-          onChange={(e) => setCompanyFilter(e.target.value)}
-          style={{ padding: "4px 8px", fontSize: "0.85rem", borderRadius: "6px" }}
-        >
-          <option value="all">すべての企業</option>
-          {companies.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {/* Tasks List */}
-      <div style={{ display: "grid", gap: "8px" }}>
-        {filteredTasks.length === 0 ? (
-          <div
-            className="card"
-            style={{ padding: "30px", textAlign: "center", color: "var(--muted)" }}
-          >
-            表示するタスクはありません。
+      {/* Issues-style Task List Container */}
+      <div className="gh-box">
+        <div className="gh-box-header">
+          <div className="gh-row-gap">
+            <button
+              type="button"
+              className={`btn btn-sm ${stateFilter === "open" ? "btn-accent" : "btn-invisible"}`}
+              onClick={() => setStateFilter("open")}
+            >
+              <Circle size={13} />
+              <span>未完了 ({openCount})</span>
+            </button>
+            <button
+              type="button"
+              className={`btn btn-sm ${stateFilter === "all" ? "btn-accent" : "btn-invisible"}`}
+              onClick={() => setStateFilter("all")}
+            >
+              <span>すべて ({tasks.length})</span>
+            </button>
+            <button
+              type="button"
+              className={`btn btn-sm ${stateFilter === "done" ? "btn-accent" : "btn-invisible"}`}
+              onClick={() => setStateFilter("done")}
+            >
+              <CheckCircle2 size={13} />
+              <span>完了済み ({doneCount})</span>
+            </button>
           </div>
-        ) : (
-          filteredTasks.map((t) => {
-            const isDone = t.state === "done";
-            const companyName = t.companyId ? companyMap.get(t.companyId) || "不明な企業" : "共通";
 
-            return (
-              <div
-                key={t.id}
-                className="card"
+          <div className="gh-row-gap">
+            <div style={{ position: "relative" }}>
+              <Search
+                size={13}
+                className="gh-muted"
                 style={{
-                  padding: "12px 16px",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: "14px",
-                  opacity: isDone ? 0.6 : 1,
-                  background: isDone ? "var(--bg-accent)" : "var(--surface)",
+                  position: "absolute",
+                  left: "8px",
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  pointerEvents: "none",
                 }}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: "12px", flex: 1 }}>
-                  <input
-                    type="checkbox"
-                    checked={isDone}
-                    onChange={() => handleToggleState(t)}
-                    style={{ width: "18px", height: "18px", cursor: "pointer" }}
-                  />
-                  <div>
+              />
+              <input
+                type="text"
+                placeholder="タスクを検索..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                style={{ paddingLeft: "26px", width: "180px", height: "28px", fontSize: "12px" }}
+              />
+            </div>
+
+            <select
+              aria-label="企業で絞り込み"
+              value={companyFilter}
+              onChange={(e) => setCompanyFilter(e.target.value)}
+              style={{ height: "28px", fontSize: "12px", padding: "2px 8px" }}
+            >
+              <option value="all">すべての企業</option>
+              {companies.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div>
+          {filteredTasks.length === 0 ? (
+            <div className="gh-empty">
+              <CheckCircle2 size={24} className="gh-subtle" />
+              <span>表示するタスクはありません。</span>
+            </div>
+          ) : (
+            filteredTasks.map((t) => {
+              const isDone = t.state === "done";
+              const isEditing = editingId === t.id;
+              const companyName = t.companyId
+                ? companyMap.get(t.companyId) || "不明な企業"
+                : "共通";
+              const stateMeta = TASK_STATE_META[t.state] || TASK_STATE_META.todo;
+              const dueRel = t.due ? formatRelativeDate(t.due) : null;
+
+              return (
+                <div
+                  key={t.id}
+                  className="card gh-box-row gh-box-row-interactive"
+                  style={{
+                    border: "none",
+                    borderRadius: 0,
+                    borderBottom: "1px solid var(--border-muted)",
+                    backgroundColor: isDone ? "var(--bg-subtle)" : "transparent",
+                  }}
+                >
+                  <div className="gh-row-between" style={{ alignItems: "flex-start" }}>
                     <div
-                      style={{
-                        fontSize: "0.95rem",
-                        fontWeight: 600,
-                        textDecoration: isDone ? "line-through" : "none",
-                      }}
+                      className="gh-row-gap"
+                      style={{ alignItems: "flex-start", gap: "10px", flex: 1, minWidth: 0 }}
                     >
-                      {t.title}
+                      <input
+                        type="checkbox"
+                        checked={isDone}
+                        onChange={() => handleToggleState(t)}
+                        aria-label={`${t.title} を完了にする`}
+                        style={{
+                          width: "16px",
+                          height: "16px",
+                          marginTop: "3px",
+                          cursor: "pointer",
+                          accentColor: "var(--success-emphasis)",
+                        }}
+                      />
+
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div className="gh-row-gap" style={{ gap: "8px" }}>
+                          <span
+                            style={{
+                              fontSize: "14px",
+                              fontWeight: 600,
+                              textDecoration: isDone ? "line-through" : "none",
+                              color: isDone ? "var(--fg-muted)" : "var(--fg-default)",
+                            }}
+                          >
+                            {t.title}
+                          </span>
+                          <span
+                            className={`gh-label ${stateMeta.labelClass}`}
+                            style={{ fontSize: "11px" }}
+                          >
+                            {stateMeta.label}
+                          </span>
+                        </div>
+
+                        <div
+                          className="gh-row-gap gh-muted"
+                          style={{ fontSize: "12px", marginTop: "4px", gap: "12px" }}
+                        >
+                          <span className="gh-row-gap" style={{ gap: "4px" }}>
+                            <Building2 size={12} />
+                            <span>{companyName}</span>
+                          </span>
+                          {t.due ? (
+                            <span className="gh-row-gap" style={{ gap: "4px" }}>
+                              <Calendar size={12} />
+                              <span className="mono">{t.due}</span>
+                              {!isDone && dueRel?.text ? (
+                                <span
+                                  className={`gh-label ${dueRel.urgent ? "gh-label-danger" : "gh-label-neutral"}`}
+                                  style={{ fontSize: "11px", padding: "0 6px" }}
+                                >
+                                  <Clock size={10} />
+                                  <span>{dueRel.text}</span>
+                                </span>
+                              ) : null}
+                            </span>
+                          ) : null}
+                          {t.notes ? <span>{t.notes}</span> : null}
+                        </div>
+                      </div>
                     </div>
-                    <div style={{ fontSize: "0.8rem", color: "var(--muted)", marginTop: "2px" }}>
-                      <span>🏢 {companyName}</span>
-                      {t.due && <span style={{ marginLeft: "10px" }}>⏰ 期限: {t.due}</span>}
-                      {t.notes && <span style={{ marginLeft: "10px" }}>📝 {t.notes}</span>}
+
+                    <div className="gh-row-gap">
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-invisible"
+                        onClick={() => setEditingId(isEditing ? null : t.id)}
+                        title="タスクを編集"
+                      >
+                        <Edit3 size={13} />
+                        <span>{isEditing ? "閉じる" : "編集"}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="button-danger btn-sm"
+                        onClick={() => handleDeleteTask(t.id)}
+                      >
+                        <Trash2 size={13} />
+                        <span>削除</span>
+                      </button>
                     </div>
                   </div>
-                </div>
 
-                <button
-                  type="button"
-                  className="button-ghost"
-                  style={{ color: "var(--danger)", fontSize: "0.82rem" }}
-                  onClick={() => handleDeleteTask(t.id)}
-                >
-                  削除
-                </button>
-              </div>
-            );
-          })
-        )}
+                  {isEditing && (
+                    <div
+                      style={{
+                        marginTop: "10px",
+                        marginLeft: "26px",
+                        padding: "12px",
+                        borderRadius: "var(--radius-md)",
+                        backgroundColor: "var(--bg-subtle)",
+                        border: "1px solid var(--border-default)",
+                        display: "grid",
+                        gap: "10px",
+                      }}
+                    >
+                      <div className="gh-row-gap">
+                        <input
+                          type="text"
+                          defaultValue={t.title}
+                          onBlur={(e) => {
+                            if (e.target.value !== t.title && e.target.value.trim()) {
+                              handlePatchTask(t, { title: e.target.value.trim() });
+                            }
+                          }}
+                          style={{ flex: 2, minWidth: "200px" }}
+                          placeholder="タスク名"
+                        />
+                        <select
+                          value={t.state}
+                          onChange={(e) =>
+                            handlePatchTask(t, { state: e.target.value as TaskState })
+                          }
+                        >
+                          <option value="todo">未着手</option>
+                          <option value="doing">進行中</option>
+                          <option value="done">完了</option>
+                        </select>
+                        <input
+                          type="date"
+                          value={t.due}
+                          onChange={(e) => handlePatchTask(t, { due: e.target.value })}
+                        />
+                        <select
+                          value={t.companyId}
+                          onChange={(e) => handlePatchTask(t, { companyId: e.target.value })}
+                        >
+                          <option value="">関連企業なし (共通)</option>
+                          {companies.map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {c.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <input
+                        type="text"
+                        defaultValue={t.notes}
+                        onBlur={(e) => {
+                          if (e.target.value !== t.notes) {
+                            handlePatchTask(t, { notes: e.target.value });
+                          }
+                        }}
+                        placeholder="メモ・補足..."
+                      />
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
       </div>
     </div>
   );

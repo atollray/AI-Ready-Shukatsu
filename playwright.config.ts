@@ -11,6 +11,12 @@ export default defineConfig({
     baseURL: "http://127.0.0.1:4319",
     trace: "on-first-retry",
     headless: true,
+    launchOptions: process.env.PLAYWRIGHT_EXECUTABLE_PATH
+      ? {
+          executablePath: process.env.PLAYWRIGHT_EXECUTABLE_PATH,
+          args: ["--no-sandbox"],
+        }
+      : undefined,
   },
   projects: [
     {
