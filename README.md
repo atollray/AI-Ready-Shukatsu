@@ -14,11 +14,15 @@
   - 一時ファイル書き出し → `rename` による原子的（アトミック）保存
   - エンティティ単位の楽観ロック（`rev`）による衝突検知
   - 1エンティティ1ファイル保存（Git 差分がクリーン）
+- 🎨 **エンジニア向け GitHub ライク UI**:
+  - Light / Dark テーマ切替対応（GitHub Primer 風トークン設計 + Lucide Icons）
+  - `⌘K` / `Ctrl+K` コマンドパレットによる企業・画面の高速ナビゲーション
+  - Markdown エディタの Write / Preview 切替、ES 文字数カウンター・進捗バー、担当者連絡先・関連リンク管理
 - 🔄 **手動保存・再読込の廃止（自動同期）**:
   - Web UI は入力 800ms 後に自動保存
   - AI がファイルを更新すると、Server-Sent Events (SSE) 経由でブラウザ画面に 1 秒以内で即座に反映
 - 📅 **予定と面接の一体管理**: 面接日程と面接記録（質問・所感・結果）を 1 つのエンティティに統合。時刻付きの予定は `calendar.ics` 経由でカレンダーアプリにも正確に反映。
-- 🧪 **サンプルデータ管理**: 初回はリアルなサンプルデータ付きで起動。不要になったらいつでもワンクリック（または `sk sample clear`）で一括削除可能。
+- 🧪 **サンプルデータ管理**: 初回はリアルなサンプルデータ付きで起動。不要になったらいつでもワンクリック（または `pnpm sk sample clear`）で一括削除可能。
 
 ---
 
@@ -26,11 +30,11 @@
 
 | レイヤー | 技術 |
 |---|---|
-| コア・スキーマ | TypeScript, **Zod v3.25** |
+| コア・スキーマ | TypeScript, **Zod v3.24** |
 | CLI | **citty**, **tsup** |
 | サーバー | **Hono** (`@hono/node-server`, `@hono/zod-validator`), **chokidar** (SSE) |
-| フロントエンド | **Vite**, **React 19**, **TanStack Query v5**, **React Router v7** |
-| テスト | **Vitest** |
+| フロントエンド | **Vite**, **React 19**, **TanStack Query v5**, **React Router v7**, **Lucide React** |
+| テスト | **Vitest** (Unit / CLI / API), **Playwright** (E2E) |
 | 整形 / Linter | **Biome** |
 
 ---
@@ -39,11 +43,11 @@
 
 ### 1. 動作環境
 - **Node.js** v20 以上
-- **pnpm** v8 以上
+- **pnpm** v9 以上
 
 ### 2. インストール
 ```bash
-# 依存パッケージのインストール（自動でCLIもビルドされます）
+# 依存パッケージのインストール（自動で Node/CLI バンドルもビルドされます）
 pnpm install
 ```
 
@@ -64,6 +68,7 @@ pnpm sk init
 pnpm dev
 
 # または 本番ビルド後に UI をブラウザで直接開く
+pnpm build
 pnpm sk ui
 ```
 
@@ -71,6 +76,7 @@ pnpm sk ui
 
 > **💡 グローバル CLI として使う場合**:
 > ```bash
+> pnpm build
 > pnpm link --global
 > # これ以降はどのディレクトリからでも `shukatsu` コマンドが使用可能になります
 > shukatsu ui
@@ -108,31 +114,35 @@ pnpm sk ui
 
 ```bash
 # 1. 総合コンテキスト取得（AIが最初に実行するコマンド）
-pnpm sk context [--sample] [--pretty]
+pnpm sk context [--sample] [--company <id>] [--pretty]
 
 # 2. 企業管理
 pnpm sk company list
-pnpm sk company find "キーワード"             # 重複チェック用検索
+pnpm sk company find "キーワード"                     # 重複チェック用検索
 pnpm sk company get <companyId>
 pnpm sk company add --input file.json
-pnpm sk company stage <companyId> <stage>    # 選考ステージを進める（履歴自動記録）
-pnpm sk company delete <companyId>
+pnpm sk company update <companyId> --input file.json [--expectRev <rev>]
+pnpm sk company stage <companyId> <stage>            # 選考ステージを進める（履歴自動記録）
+pnpm sk company delete <companyId> [--hard]
 
 # 3. タスク管理
-pnpm sk task list [--company <id>] [--open-only]
+pnpm sk task list [--company <id>] [--openOnly]
 pnpm sk task add --title "タスク名" [--company <id>] [--due YYYY-MM-DD]
-pnpm sk task done <taskId>                   # 完了にする
+pnpm sk task update <taskId> [--title ...] [--state todo|doing|done] [--due YYYY-MM-DD]
+pnpm sk task done <taskId>                           # 完了にする
 
 # 4. イベント・面接
 pnpm sk event list --company <id>
-pnpm sk event add --company <id> --title "1次面接" --kind interview --start "2026-11-20T14:00"
+pnpm sk event add --company <id> --title "1次面接" --kind interview --start "2026-11-20T14:00" [--input event.json]
 
 # 5. エントリーシート (ES)
 pnpm sk es list --company <id>
-pnpm sk es add --company <id> --title "ガクチカ" --question "..."
+pnpm sk es add --company <id> --title "ガクチカ" --question "..." [--input es.json]
+pnpm sk es update --company <id> --id <esId> --input es.json
 
 # 6. ノート
-pnpm sk note add --title "面接メモ" --content "..." [--company <id>]
+pnpm sk note list [--company <id>]
+pnpm sk note add --title "面接メモ" [--content "..." | --input note.json] [--company <id>]
 pnpm sk note search "キーワード"
 
 # 7. プロフィール
@@ -142,14 +152,27 @@ pnpm sk profile update --input profile.json
 # 8. サンプルデータ一括削除
 pnpm sk sample clear
 
-# 9. データベース整合性チェック
+# 9. スキーマ定義確認・整合性チェック・派生ビュー再生成
+pnpm sk schema [company|task|note|profile|event|es]
 pnpm sk doctor
-
-# 10. 派生ビュー（Markdown/ICS）の再生成
 pnpm sk sync
 
-# 11. Web UI 起動
+# 10. Web UI 起動
 pnpm sk ui [--port 4319] [--no-open]
+```
+
+---
+
+## 🧪 テスト・開発チェック
+
+```bash
+pnpm exec tsc --noEmit   # 型チェック
+pnpm lint                # Biome lint & format チェック
+pnpm test                # Core / CLI / API テスト (Vitest)
+pnpm build               # Node + Web 本番ビルド
+
+# E2E テスト（サーバー起動状態で別ターミナルまたはバックグラウンド実行）
+pnpm test:e2e
 ```
 
 ---
