@@ -79,4 +79,119 @@ describe("Hono Server API tests", () => {
     const companies = await store.listCompanies();
     expect(companies.length).toBe(0);
   });
+
+  it("GET /api/export returns full workspace backup and download headers", async () => {
+    const res = await app.request("/api/export?download=true");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Disposition")).toContain("shukatsu-backup-");
+
+    const backup = await res.json();
+    expect(backup.exportedAt).toBeTruthy();
+    expect(backup.meta.schemaVersion).toBe(2);
+    expect(backup.profile.name).toBe("就活 太郎");
+    expect(backup.companies.length).toBe(2);
+    expect(backup.tasks.length).toBe(3);
+  });
+
+  it("POST /api/import restores backup in merge and replace modes", async () => {
+    const exportRes = await app.request("/api/export");
+    const backup = await exportRes.json();
+
+    // Clear existing data and restore in merge mode
+    await app.request("/api/sample/clear", { method: "POST" });
+    expect((await store.listCompanies()).length).toBe(0);
+
+    const customTask = {
+      id: "tk_custom_import",
+      rev: 1,
+      updatedAt: new Date().toISOString(),
+      isSample: false,
+      title: "インポートテストタスク",
+      state: "todo",
+      due: "2026-12-01",
+      companyId: "",
+      notes: "",
+    };
+
+    const mergeRes = await app.request("/api/import?mode=merge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...backup,
+        tasks: [customTask],
+      }),
+    });
+    expect(mergeRes.status).toBe(200);
+    const mergeJson = await mergeRes.json();
+    expect(mergeJson.data.imported.companies).toBe(2);
+    expect(mergeJson.data.imported.tasks).toBe(1);
+    expect((await store.listCompanies()).length).toBe(2);
+
+    // Replace mode replaces existing records with payload
+    const replaceRes = await app.request("/api/import?mode=replace", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        companies: [],
+        tasks: [customTask],
+        notes: [],
+      }),
+    });
+    expect(replaceRes.status).toBe(200);
+    expect((await store.listCompanies()).length).toBe(0);
+    expect((await store.listTasks()).map((t) => t.id)).toEqual(["tk_custom_import"]);
+
+    // Invalid payload returns 400
+    const badRes = await app.request("/api/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ companies: [{ invalid: true }] }),
+    });
+    expect(badRes.status).toBe(400);
+  });
+
+  it("GET /api/calendar.ics exports valid iCalendar with non-sample events", async () => {
+    await store.saveCompany({
+      id: "co_cal_test",
+      rev: 1,
+      updatedAt: new Date().toISOString(),
+      isSample: false,
+      name: "カレンダー株式会社",
+      industry: "SaaS",
+      headquarters: "東京",
+      urls: { careers: "", application: "" },
+      tags: [],
+      stage: "interview",
+      currentTrack: "本選考",
+      stageHistory: [],
+      interestScore: 5,
+      fitScore: 4,
+      motivation: "",
+      sellingPoints: "",
+      concerns: "",
+      conditions: "",
+      memo: "",
+      esEntries: [],
+      events: [
+        {
+          id: "ev_cal_1",
+          kind: "interview",
+          title: "最終面接",
+          start: "2026-12-10T15:00",
+          location: "オンライン",
+          notes: "役員面接",
+        },
+      ],
+      contacts: [],
+      documents: [],
+    });
+
+    const res = await app.request("/api/calendar.ics");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toContain("text/calendar");
+    const ics = await res.text();
+    expect(ics).toContain("BEGIN:VCALENDAR");
+    expect(ics).toContain("SUMMARY:[カレンダー株式会社] 最終面接");
+    expect(ics).toContain("END:VCALENDAR");
+  });
 });

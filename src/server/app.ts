@@ -8,6 +8,7 @@ import {
   CompanySchema,
   ConflictError,
   type FsStore,
+  MetaDataSchema,
   NotFoundError,
   type NoteItem,
   NoteItemSchema,
@@ -15,6 +16,7 @@ import {
   ProfileDataSchema,
   type TaskItem,
   TaskItemSchema,
+  formatCalendarIcs,
 } from "../core";
 import { storeEvents } from "./watcher";
 
@@ -287,6 +289,113 @@ export function createApp(store: FsStore): Hono {
   app.post("/api/sample/clear", async (c) => {
     const result = await store.clearSamples();
     return c.json({ ok: true, data: result });
+  });
+
+  // Export Workspace Backup JSON
+  app.get("/api/export", async (c) => {
+    const [meta, profile, companies, tasks, notes] = await Promise.all([
+      store.getMeta(),
+      store.getProfile(),
+      store.listCompanies({ includeDeleted: false, includeSample: true }),
+      store.listTasks({ includeDeleted: false, includeSample: true }),
+      store.listNotes({ includeDeleted: false, includeSample: true }),
+    ]);
+
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      meta,
+      profile,
+      companies,
+      tasks,
+      notes,
+    };
+
+    if (c.req.query("download") === "true") {
+      const dateStr = payload.exportedAt.slice(0, 10);
+      c.header("Content-Disposition", `attachment; filename="shukatsu-backup-${dateStr}.json"`);
+    }
+
+    return c.json(payload);
+  });
+
+  // Import Workspace Backup JSON
+  const WorkspaceBackupSchema = z.object({
+    exportedAt: z.string().optional(),
+    meta: MetaDataSchema.optional(),
+    profile: ProfileDataSchema.partial().optional(),
+    companies: z.array(CompanySchema).default([]),
+    tasks: z.array(TaskItemSchema).default([]),
+    notes: z.array(NoteItemSchema).default([]),
+  });
+
+  app.post("/api/import", zValidator("json", WorkspaceBackupSchema), async (c) => {
+    const backup = c.req.valid("json");
+    const mode = c.req.query("mode") === "replace" ? "replace" : "merge";
+
+    if (mode === "replace") {
+      const [existingCompanies, existingTasks, existingNotes] = await Promise.all([
+        store.listCompanies({ includeDeleted: true, includeSample: true }),
+        store.listTasks({ includeDeleted: true, includeSample: true }),
+        store.listNotes({ includeDeleted: true, includeSample: true }),
+      ]);
+      for (const co of existingCompanies) {
+        await store.deleteCompany(co.id, true);
+      }
+      for (const tk of existingTasks) {
+        await store.deleteTask(tk.id, true);
+      }
+      for (const nt of existingNotes) {
+        await store.deleteNote(nt.id, true);
+      }
+    }
+
+    let profileUpdated = false;
+    if (backup.profile) {
+      await store.updateProfile(backup.profile);
+      profileUpdated = true;
+    }
+
+    for (const company of backup.companies) {
+      await store.saveCompany({ ...company, deletedAt: undefined });
+    }
+    for (const task of backup.tasks) {
+      await store.saveTask({ ...task, deletedAt: undefined });
+    }
+    for (const note of backup.notes) {
+      await store.saveNote({ ...note, deletedAt: undefined });
+    }
+
+    await store.syncViews();
+
+    return c.json({
+      ok: true,
+      data: {
+        mode,
+        imported: {
+          companies: backup.companies.length,
+          tasks: backup.tasks.length,
+          notes: backup.notes.length,
+          profileUpdated,
+        },
+      },
+    });
+  });
+
+  // Calendar ICS Export
+  app.get("/api/calendar.ics", async (c) => {
+    const [companies, tasks] = await Promise.all([
+      store.listCompanies({ includeDeleted: false, includeSample: true }),
+      store.listTasks({ includeDeleted: false, includeSample: true }),
+    ]);
+
+    const ics = formatCalendarIcs(companies, tasks);
+    return new Response(ics, {
+      status: 200,
+      headers: {
+        "Content-Type": "text/calendar; charset=utf-8",
+        "Content-Disposition": 'attachment; filename="shukatsu-calendar.ics"',
+      },
+    });
   });
 
   return app;
