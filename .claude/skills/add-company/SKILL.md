@@ -66,12 +66,12 @@ PowerShellの文字化けを防ぐため、一時ファイル `_tmp_company.json
 }
 ```
 
-CLI で登録を実行：
+CLI で登録を実行（フィールド定義は `pnpm sk schema company` で確認可能）：
 ```bash
 pnpm sk company add --input _tmp_company.json
+rm -f _tmp_company.json
 ```
-返却された JSON の `data.id`（例: `co_1234abcd`）を記録する。
-登録後、`_tmp_company.json` は削除する。
+返却された JSON の `id`（例: `co_1234abcd`）を記録する。
 
 ### 6. タスクの自動生成
 企業の選考段階や調査状況に応じ、次にとるべきタスクを1〜3件登録する：

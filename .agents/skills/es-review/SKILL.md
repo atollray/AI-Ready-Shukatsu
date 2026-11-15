@@ -31,15 +31,20 @@ pnpm sk es list --company <companyId>
 - **文字数**: 文字数制限（charLimit）の 85%〜95% に収まっているか
 
 ### 4. 改善案の提示と更新
-チャットで添削理由と修正案を提示し、ユーザーの合意が得られたら CLI で反映する：
+チャットで添削理由と修正案を提示し、ユーザーの合意が得られたら CLI で反映する。
+`_tmp_es.json`（有効な JSON、コメント不可）を作成して実行し、反映後に削除する：
 ```json
-// _tmp_es.json
 {
   "draft": "ブラッシュアップ後の回答文...",
   "status": "review"
 }
 ```
 ```bash
+# 既存 ES を更新する場合
 pnpm sk es update --company <companyId> --id <esId> --input _tmp_es.json
+
+# 新規 ES 設問として追加する場合
+pnpm sk es add --company <companyId> --title "ガクチカ" --input _tmp_es.json
+
+rm -f _tmp_es.json
 ```
-反映後、`_tmp_es.json` を削除する。
