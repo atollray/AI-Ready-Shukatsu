@@ -127,3 +127,45 @@ export async function clearSamplesApi(): Promise<void> {
   const res = await fetch("/api/sample/clear", { method: "POST" });
   if (!res.ok) throw new Error("Failed to clear sample data");
 }
+
+export interface WorkspaceBackup {
+  exportedAt: string;
+  meta?: { schemaVersion: number; updatedAt: string };
+  profile?: Partial<ProfileData>;
+  companies: Company[];
+  tasks: TaskItem[];
+  notes: NoteItem[];
+}
+
+export interface ImportBackupResult {
+  mode: "merge" | "replace";
+  imported: {
+    companies: number;
+    tasks: number;
+    notes: number;
+    profileUpdated: boolean;
+  };
+}
+
+export async function exportWorkspaceBackup(): Promise<WorkspaceBackup> {
+  const res = await fetch("/api/export");
+  if (!res.ok) throw new Error("Failed to export workspace backup");
+  return res.json();
+}
+
+export async function importWorkspaceBackup(
+  backup: WorkspaceBackup,
+  mode: "merge" | "replace" = "merge",
+): Promise<ImportBackupResult> {
+  const res = await fetch(`/api/import?mode=${mode}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(backup),
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    throw new Error(errText || "Failed to import workspace backup");
+  }
+  const json = await res.json();
+  return json.data;
+}

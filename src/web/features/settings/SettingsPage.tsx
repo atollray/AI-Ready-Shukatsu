@@ -1,13 +1,37 @@
 import type { ProfileData } from "@/core/client";
-import { AlertTriangle, Compass, Keyboard, Target, Trash2, User } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import { clearSamplesApi, patchProfile } from "../../api/client";
+import {
+  AlertTriangle,
+  Calendar,
+  Compass,
+  Database,
+  Download,
+  Keyboard,
+  Target,
+  Trash2,
+  Upload,
+  User,
+} from "lucide-react";
+import { type ChangeEvent, useEffect, useRef, useState } from "react";
+import {
+  type WorkspaceBackup,
+  clearSamplesApi,
+  exportWorkspaceBackup,
+  importWorkspaceBackup,
+  patchProfile,
+} from "../../api/client";
 import { useWorkspace } from "../../api/use-workspace";
 
 export function SettingsPage() {
   const { data, isLoading, refetch, setSaveStatus } = useWorkspace();
   const [form, setForm] = useState<ProfileData | null>(null);
+  const [importMode, setImportMode] = useState<"merge" | "replace">("merge");
+  const [backupMessage, setBackupMessage] = useState<{
+    type: "success" | "error";
+    text: string;
+  } | null>(null);
+  const [isBackingUp, setIsBackingUp] = useState(false);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (data?.profile) {
@@ -69,6 +93,61 @@ export function SettingsPage() {
     data?.tasks.some((t) => t.isSample) ||
     data?.notes.some((n) => n.isSample);
 
+  const handleExportBackup = async () => {
+    setIsBackingUp(true);
+    setBackupMessage(null);
+    try {
+      const backup = await exportWorkspaceBackup();
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `shukatsu-backup-${backup.exportedAt.slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setBackupMessage({
+        type: "success",
+        text: `バックアップを出力しました（企業 ${backup.companies.length}社・タスク ${backup.tasks.length}件・ノート ${backup.notes.length}件）`,
+      });
+    } catch (err) {
+      setBackupMessage({
+        type: "error",
+        text: `エクスポートに失敗しました: ${(err as Error).message}`,
+      });
+    } finally {
+      setIsBackingUp(false);
+    }
+  };
+
+  const handleImportBackupFile = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsBackingUp(true);
+    setBackupMessage(null);
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text) as WorkspaceBackup;
+      const result = await importWorkspaceBackup(parsed, importMode);
+      await refetch();
+      setBackupMessage({
+        type: "success",
+        text: `${importMode === "replace" ? "置き換え" : "マージ"}インポート完了（企業 ${result.imported.companies}社・タスク ${result.imported.tasks}件・ノート ${result.imported.notes}件）`,
+      });
+    } catch (err) {
+      setBackupMessage({
+        type: "error",
+        text: `インポートに失敗しました: ${(err as Error).message}`,
+      });
+    } finally {
+      setIsBackingUp(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
+  };
+
   const handleClearSample = async () => {
     if (
       !window.confirm("サンプルデータをすべて削除しますか？ご自身が登録したデータは保持されます。")
@@ -78,9 +157,12 @@ export function SettingsPage() {
     try {
       await clearSamplesApi();
       await refetch();
-      alert("サンプルデータを削除しました。");
+      setBackupMessage({ type: "success", text: "サンプルデータを削除しました。" });
     } catch (err) {
-      alert("削除に失敗しました: " + (err as Error).message);
+      setBackupMessage({
+        type: "error",
+        text: `削除に失敗しました: ${(err as Error).message}`,
+      });
     }
   };
 
@@ -290,6 +372,113 @@ export function SettingsPage() {
               placeholder="選考の判断軸や記録ポリシー"
             />
           </div>
+        </div>
+      </section>
+
+      {/* Data Backup & Calendar Export */}
+      <section className="card">
+        <div className="gh-box-header">
+          <h2 className="gh-box-title">
+            <Database size={15} className="gh-muted" />
+            <span>データバックアップ & カレンダー連携</span>
+          </h2>
+          <span className="gh-muted" style={{ fontSize: "12px" }}>
+            JSON エクスポート / 復元 / iCalendar (.ics)
+          </span>
+        </div>
+
+        <div className="gh-box-body gh-stack">
+          <div className="gh-row-between" style={{ gap: "12px", flexWrap: "wrap" }}>
+            <div>
+              <div style={{ fontSize: "13px", fontWeight: 600 }}>
+                ワークスペース JSON バックアップ
+              </div>
+              <p className="gh-muted" style={{ margin: "2px 0 0", fontSize: "12px" }}>
+                全企業・ES・イベント・タスク・ノート・プロフィールを 1 つの JSON
+                ファイルとして保存・復元します。
+              </p>
+            </div>
+            <div className="gh-row-gap" style={{ flexWrap: "wrap" }}>
+              <button
+                type="button"
+                className="button"
+                onClick={handleExportBackup}
+                disabled={isBackingUp}
+              >
+                <Download size={14} />
+                <span>JSON エクスポート</span>
+              </button>
+
+              <select
+                aria-label="インポートモード"
+                value={importMode}
+                onChange={(e) => setImportMode(e.target.value as "merge" | "replace")}
+                style={{ width: "auto", fontSize: "12px" }}
+              >
+                <option value="merge">マージ（追加・上書き）</option>
+                <option value="replace">置き換え（全入れ替え）</option>
+              </select>
+
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="application/json,.json"
+                onChange={handleImportBackupFile}
+                style={{ display: "none" }}
+                aria-label="バックアップJSONファイルを選択"
+              />
+              <button
+                type="button"
+                className="button-primary"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isBackingUp}
+              >
+                <Upload size={14} />
+                <span>JSON インポート</span>
+              </button>
+            </div>
+          </div>
+
+          <div
+            className="gh-row-between"
+            style={{
+              paddingTop: "12px",
+              borderTop: "1px solid var(--border-muted)",
+              gap: "12px",
+              flexWrap: "wrap",
+            }}
+          >
+            <div>
+              <div style={{ fontSize: "13px", fontWeight: 600 }}>カレンダー連携 (.ics)</div>
+              <p className="gh-muted" style={{ margin: "2px 0 0", fontSize: "12px" }}>
+                面接日程・ES締切・タスク期日を Google カレンダーや Apple カレンダーに取り込める ICS
+                形式で出力します。
+              </p>
+            </div>
+            <a href="/api/calendar.ics" download="shukatsu-calendar.ics" className="button">
+              <Calendar size={14} />
+              <span>calendar.ics をダウンロード</span>
+            </a>
+          </div>
+
+          {backupMessage && (
+            <output
+              style={{
+                display: "block",
+                padding: "8px 12px",
+                borderRadius: "6px",
+                fontSize: "12px",
+                border: "1px solid",
+                borderColor:
+                  backupMessage.type === "error" ? "var(--danger-muted)" : "var(--success-muted)",
+                background:
+                  backupMessage.type === "error" ? "var(--danger-subtle)" : "var(--success-subtle)",
+                color: backupMessage.type === "error" ? "var(--danger-fg)" : "var(--success-fg)",
+              }}
+            >
+              {backupMessage.text}
+            </output>
+          )}
         </div>
       </section>
 
