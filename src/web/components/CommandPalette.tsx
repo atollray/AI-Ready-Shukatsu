@@ -1,14 +1,19 @@
+import { generateId } from "@/core/client";
 import {
   Building2,
   CheckSquare,
   CornerDownLeft,
   FileText,
   LayoutDashboard,
+  Moon,
+  Plus,
   Search,
   Settings,
+  Sun,
 } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
+import { createCompany, createNote } from "../api/client";
 import { useWorkspace } from "../api/use-workspace";
 import { STAGE_MAP } from "../constants/meta";
 
@@ -24,10 +29,12 @@ interface CommandItem {
 interface CommandPaletteProps {
   open: boolean;
   onClose: () => void;
+  theme?: "light" | "dark";
+  onToggleTheme?: () => void;
 }
 
-export function CommandPalette({ open, onClose }: CommandPaletteProps) {
-  const { data } = useWorkspace();
+export function CommandPalette({ open, onClose, theme, onToggleTheme }: CommandPaletteProps) {
+  const { data, refetch, showToast } = useWorkspace();
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
@@ -42,6 +49,94 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   }, [open]);
 
   const items = useMemo<CommandItem[]>(() => {
+    const actionItems: CommandItem[] = [
+      ...(onToggleTheme
+        ? [
+            {
+              id: "act-theme",
+              group: "アクション",
+              label: theme === "dark" ? "ライトテーマに切り替え" : "ダークテーマに切り替え",
+              meta: "Theme",
+              icon: theme === "dark" ? <Sun size={15} /> : <Moon size={15} />,
+              onSelect: () => onToggleTheme(),
+            },
+          ]
+        : []),
+      {
+        id: "act-new-company",
+        group: "アクション",
+        label: "新しい企業を追加",
+        meta: "Create Company",
+        icon: <Plus size={15} />,
+        onSelect: async () => {
+          const now = new Date().toISOString();
+          try {
+            const saved = await createCompany({
+              id: generateId("co"),
+              rev: 1,
+              updatedAt: now,
+              isSample: false,
+              name: "新規企業",
+              industry: "",
+              headquarters: "",
+              urls: { careers: "", application: "" },
+              tags: [],
+              stage: "researching",
+              currentTrack: "本選考",
+              stageHistory: [{ at: now, track: "本選考", from: "wishlist", to: "researching" }],
+              interestScore: 3,
+              fitScore: 3,
+              motivation: "",
+              sellingPoints: "",
+              concerns: "",
+              conditions: "",
+              memo: "",
+              esEntries: [],
+              events: [],
+              contacts: [],
+              documents: [],
+            });
+            await refetch();
+            navigate(`/companies?selected=${saved.id}`);
+          } catch (err) {
+            showToast({
+              message: `企業の作成に失敗しました: ${(err as Error).message}`,
+              variant: "error",
+            });
+          }
+        },
+      },
+      {
+        id: "act-new-note",
+        group: "アクション",
+        label: "新しいノートを作成",
+        meta: "Create Note",
+        icon: <Plus size={15} />,
+        onSelect: async () => {
+          const now = new Date().toISOString();
+          try {
+            const saved = await createNote({
+              id: generateId("nt"),
+              rev: 1,
+              updatedAt: now,
+              isSample: false,
+              title: "新規ノート",
+              date: now.slice(0, 10),
+              companyId: "",
+              content: "",
+            });
+            await refetch();
+            navigate(`/notes?selected=${saved.id}`);
+          } catch (err) {
+            showToast({
+              message: `ノートの作成に失敗しました: ${(err as Error).message}`,
+              variant: "error",
+            });
+          }
+        },
+      },
+    ];
+
     const navItems: CommandItem[] = [
       {
         id: "nav-dashboard",
@@ -103,16 +198,18 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
       onSelect: () => navigate(`/notes?selected=${n.id}`),
     }));
 
-    const all = [...navItems, ...companyItems, ...noteItems];
+    const all = [...actionItems, ...navItems, ...companyItems, ...noteItems];
     const q = query.trim().toLowerCase();
     if (!q) return all.slice(0, 12);
     return all
       .filter(
         (item) =>
-          item.label.toLowerCase().includes(q) || (item.meta || "").toLowerCase().includes(q),
+          item.label.toLowerCase().includes(q) ||
+          item.group.toLowerCase().includes(q) ||
+          (item.meta || "").toLowerCase().includes(q),
       )
       .slice(0, 15);
-  }, [data, navigate, query]);
+  }, [data, navigate, onToggleTheme, query, refetch, showToast, theme]);
 
   if (!open) return null;
 

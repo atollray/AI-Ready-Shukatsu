@@ -57,7 +57,7 @@ function saveStateMeta(status: SaveStatus, lastSync: string) {
 }
 
 export function Layout() {
-  const { data, refetch, saveStatus, lastSyncTime } = useWorkspace();
+  const { data, refetch, saveStatus, setSaveStatus, lastSyncTime, showToast } = useWorkspace();
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [clearingSample, setClearingSample] = useState(false);
   const [cmdOpen, setCmdOpen] = useState(false);
@@ -102,11 +102,21 @@ export function Layout() {
     try {
       await clearSamplesApi();
       await refetch();
+      showToast({ message: "サンプルデータを削除しました", variant: "success" });
     } catch (err) {
-      alert("サンプルデータの削除に失敗しました: " + (err as Error).message);
+      showToast({
+        message: `サンプルデータの削除に失敗しました: ${(err as Error).message}`,
+        variant: "error",
+      });
     } finally {
       setClearingSample(false);
     }
+  };
+
+  const handleResolveConflictReload = async () => {
+    await refetch();
+    setSaveStatus("idle");
+    showToast({ message: "最新のローカルデータを読み込みました", variant: "info" });
   };
 
   const statusMeta = saveStateMeta(saveStatus, lastSyncTime);
@@ -210,6 +220,24 @@ export function Layout() {
         </div>
       </header>
 
+      {saveStatus === "conflict" && (
+        <div className="gh-flash">
+          <div className="gh-flash-inner gh-flash-danger">
+            <span className="gh-flash-msg">
+              <AlertTriangle size={16} style={{ color: "var(--danger-fg)", flexShrink: 0 }} />
+              <span>
+                <strong>保存の競合 (409 Conflict):</strong> CLI
+                や外部エディタでファイルが更新されました。最新データを読み込んでください。
+              </span>
+            </span>
+            <button type="button" className="btn btn-sm" onClick={handleResolveConflictReload}>
+              <RefreshCw size={13} />
+              <span>最新データを再読込</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {hasSampleData && (
         <div className="gh-flash">
           <div className="gh-flash-inner">
@@ -237,7 +265,12 @@ export function Layout() {
         <Outlet />
       </main>
 
-      <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)} />
+      <CommandPalette
+        open={cmdOpen}
+        onClose={() => setCmdOpen(false)}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+      />
     </div>
   );
 }

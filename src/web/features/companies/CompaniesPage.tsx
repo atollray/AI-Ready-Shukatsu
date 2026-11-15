@@ -10,7 +10,7 @@ import { CompanyDetail } from "./CompanyDetail";
 type SortKey = "score" | "updated" | "name";
 
 export function CompaniesPage() {
-  const { data, isLoading, refetch, setSaveStatus } = useWorkspace();
+  const { data, isLoading, refetch, setSaveStatus, showToast } = useWorkspace();
   const [searchParams, setSearchParams] = useSearchParams();
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState<SortKey>("score");
@@ -132,18 +132,46 @@ export function CompaniesPage() {
       await refetch();
       updateParams({ selected: saved.id });
     } catch (err) {
-      alert("企業の作成に失敗しました: " + (err as Error).message);
+      showToast({
+        message: `企業の作成に失敗しました: ${(err as Error).message}`,
+        variant: "error",
+      });
     }
   };
 
   const handleDeleteCompany = async (id: string) => {
+    const target = companies.find((c) => c.id === id);
+    const snapshot = target ? { ...target, deletedAt: undefined } : null;
     try {
       await deleteCompanyApi(id);
       await refetch();
       const remaining = companies.filter((c) => c.id !== id);
       updateParams({ selected: remaining[0]?.id || null });
+      if (snapshot) {
+        showToast({
+          message: `「${snapshot.name}」を削除しました`,
+          variant: "info",
+          actionLabel: "元に戻す",
+          onAction: async () => {
+            try {
+              const restored = await createCompany(snapshot);
+              await refetch();
+              updateParams({ selected: restored.id });
+              showToast({ message: `「${restored.name}」を復元しました`, variant: "success" });
+            } catch (err) {
+              showToast({
+                message: `企業の復元に失敗しました: ${(err as Error).message}`,
+                variant: "error",
+              });
+            }
+          },
+        });
+      }
     } catch (err) {
-      alert("企業の削除に失敗しました: " + (err as Error).message);
+      showToast({
+        message: `企業の削除に失敗しました: ${(err as Error).message}`,
+        variant: "error",
+      });
     }
   };
 

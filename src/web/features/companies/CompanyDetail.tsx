@@ -5,11 +5,13 @@ import {
   type DocumentEntry,
   type EsEntry,
   type EventEntry,
+  type TaskItem,
   generateId,
 } from "@/core/client";
 import {
   Calendar,
   Check,
+  CheckSquare,
   ClipboardList,
   Copy,
   ExternalLink,
@@ -24,8 +26,8 @@ import {
   Users,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { patchCompany } from "../../api/client";
-import type { SaveStatus } from "../../api/use-workspace";
+import { createTask, patchCompany, patchTask } from "../../api/client";
+import { type SaveStatus, useWorkspace } from "../../api/use-workspace";
 import { MarkdownPreview } from "../../components/MarkdownPreview";
 import { StageBadge } from "../../components/StageBadge";
 import {
@@ -63,33 +65,58 @@ export function CompanyDetail({
   onCompanyDeleted,
   setSaveStatus,
 }: CompanyDetailProps) {
+  const { data: workspaceData, refetch, showToast } = useWorkspace();
   const [form, setForm] = useState<Company>(company);
   const [activeTab, setActiveTab] = useState<DetailTab>("overview");
   const [overviewMode, setOverviewMode] = useState<"write" | "preview">("write");
   const [previewEsIds, setPreviewEsIds] = useState<Record<string, boolean>>({});
+  const [excludeWsEsIds, setExcludeWsEsIds] = useState<Record<string, boolean>>({});
   const [showHistory, setShowHistory] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [tagInput, setTagInput] = useState(company.tags.join(", "));
+  const [newTaskTitle, setNewTaskTitle] = useState("");
+  const [newTaskDue, setNewTaskDue] = useState("");
 
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestRevRef = useRef<number>(company.rev);
+  const pendingSaveRef = useRef<Company | null>(null);
 
   useEffect(() => {
     setForm(company);
     setTagInput(company.tags.join(", "));
     latestRevRef.current = company.rev;
+    pendingSaveRef.current = null;
+    setConfirmDelete(false);
   }, [company]);
+
+  const cleanupCallbacksRef = useRef({ refetch, setSaveStatus });
+  cleanupCallbacksRef.current = { refetch, setSaveStatus };
 
   useEffect(() => {
     return () => {
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
+        saveTimeoutRef.current = null;
+      }
+      const pending = pendingSaveRef.current;
+      if (pending) {
+        pendingSaveRef.current = null;
+        void patchCompany(pending.id, pending, latestRevRef.current)
+          .then(() => cleanupCallbacksRef.current.refetch())
+          .catch((err: unknown) => {
+            const msg = err instanceof Error ? err.message : "";
+            cleanupCallbacksRef.current.setSaveStatus(
+              msg.startsWith("CONFLICT") ? "conflict" : "error",
+            );
+          });
       }
     };
   }, []);
 
   const triggerAutoSave = (updated: Company) => {
     setForm(updated);
+    pendingSaveRef.current = updated;
     setSaveStatus("saving");
 
     if (saveTimeoutRef.current) {
@@ -97,8 +124,12 @@ export function CompanyDetail({
     }
 
     saveTimeoutRef.current = setTimeout(async () => {
+      saveTimeoutRef.current = null;
+      const target = pendingSaveRef.current;
+      if (!target) return;
+      pendingSaveRef.current = null;
       try {
-        const saved = await patchCompany(updated.id, updated, latestRevRef.current);
+        const saved = await patchCompany(target.id, target, latestRevRef.current);
         latestRevRef.current = saved.rev;
         onCompanyUpdated(saved);
         setSaveStatus("saved");
@@ -253,6 +284,47 @@ export function CompanyDetail({
     });
   };
 
+  const companyTasks = (workspaceData?.tasks || []).filter((t) => t.companyId === form.id);
+
+  const handleToggleCompanyTask = async (task: TaskItem) => {
+    setSaveStatus("saving");
+    try {
+      await patchTask(task.id, { state: task.state === "done" ? "todo" : "done" }, task.rev);
+      await refetch();
+      setSaveStatus("saved");
+    } catch {
+      setSaveStatus("error");
+      showToast({ message: "タスクの更新に失敗しました", variant: "error" });
+    }
+  };
+
+  const handleAddCompanyTask = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newTaskTitle.trim()) return;
+    setSaveStatus("saving");
+    try {
+      await createTask({
+        id: generateId("tk"),
+        rev: 1,
+        updatedAt: new Date().toISOString(),
+        isSample: false,
+        title: newTaskTitle.trim(),
+        state: "todo",
+        due: newTaskDue,
+        companyId: form.id,
+        notes: "",
+      });
+      setNewTaskTitle("");
+      setNewTaskDue("");
+      await refetch();
+      setSaveStatus("saved");
+      showToast({ message: "関連タスクを追加しました", variant: "success" });
+    } catch {
+      setSaveStatus("error");
+      showToast({ message: "タスクの追加に失敗しました", variant: "error" });
+    }
+  };
+
   const activeStageIdx = ACTIVE_STAGE_FLOW.indexOf(form.stage);
   const resourceCount = form.contacts.length + form.documents.length;
 
@@ -302,18 +374,34 @@ export function CompanyDetail({
               <History size={13} />
               <span>履歴 ({form.stageHistory.length})</span>
             </button>
-            <button
-              type="button"
-              className="button-danger btn-sm"
-              onClick={() => {
-                if (window.confirm(`「${form.name}」を削除しますか？`)) {
-                  onCompanyDeleted(form.id);
-                }
-              }}
-            >
-              <Trash2 size={13} />
-              <span>削除</span>
-            </button>
+            {confirmDelete ? (
+              <>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => setConfirmDelete(false)}
+                >
+                  キャンセル
+                </button>
+                <button
+                  type="button"
+                  className="button-danger btn-sm"
+                  onClick={() => onCompanyDeleted(form.id)}
+                >
+                  <Trash2 size={13} />
+                  <span>本当に削除する</span>
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                className="button-danger btn-sm"
+                onClick={() => setConfirmDelete(true)}
+              >
+                <Trash2 size={13} />
+                <span>削除</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -615,6 +703,95 @@ export function CompanyDetail({
                 </div>
               </div>
             )}
+
+            {/* Related Tasks for this Company */}
+            <div className="card">
+              <div className="gh-box-header" style={{ padding: "8px 12px" }}>
+                <span className="gh-box-title" style={{ fontSize: "13px" }}>
+                  <CheckSquare size={14} className="gh-muted" />
+                  <span>この企業のタスク</span>
+                  <span className="gh-counter">
+                    {companyTasks.filter((t) => t.state !== "done").length}
+                  </span>
+                </span>
+              </div>
+              <div className="gh-box-body" style={{ display: "grid", gap: "10px" }}>
+                {companyTasks.length === 0 ? (
+                  <div className="gh-muted" style={{ fontSize: "12px" }}>
+                    紐づくタスクはありません。
+                  </div>
+                ) : (
+                  <div style={{ display: "grid", gap: "6px" }}>
+                    {companyTasks.map((t) => {
+                      const isDone = t.state === "done";
+                      const dueRel = t.due ? formatRelativeDate(t.due) : null;
+                      return (
+                        <label
+                          key={t.id}
+                          className="gh-row-between"
+                          style={{
+                            padding: "6px 8px",
+                            borderRadius: "var(--radius-sm)",
+                            backgroundColor: isDone ? "var(--bg-subtle)" : "transparent",
+                            border: "1px solid var(--border-muted)",
+                            cursor: "pointer",
+                            fontSize: "13px",
+                          }}
+                        >
+                          <span className="gh-row-gap" style={{ minWidth: 0 }}>
+                            <input
+                              type="checkbox"
+                              checked={isDone}
+                              onChange={() => handleToggleCompanyTask(t)}
+                              style={{ accentColor: "var(--success-emphasis)" }}
+                            />
+                            <span
+                              style={{
+                                textDecoration: isDone ? "line-through" : "none",
+                                color: isDone ? "var(--fg-muted)" : "var(--fg-default)",
+                              }}
+                            >
+                              {t.title}
+                            </span>
+                          </span>
+                          <span className="gh-row-gap gh-muted" style={{ fontSize: "11px" }}>
+                            {t.due ? <span className="mono">{t.due}</span> : null}
+                            {!isDone && dueRel?.text ? (
+                              <span
+                                className={`gh-label ${dueRel.urgent ? "gh-label-danger" : "gh-label-neutral"}`}
+                                style={{ fontSize: "10px", padding: "0 5px" }}
+                              >
+                                {dueRel.text}
+                              </span>
+                            ) : null}
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+
+                <form onSubmit={handleAddCompanyTask} className="gh-row-gap">
+                  <input
+                    type="text"
+                    value={newTaskTitle}
+                    onChange={(e) => setNewTaskTitle(e.target.value)}
+                    placeholder="この企業のタスクを追加..."
+                    style={{ flex: 1, minWidth: "160px" }}
+                  />
+                  <input
+                    type="date"
+                    aria-label="企業タスク期限"
+                    value={newTaskDue}
+                    onChange={(e) => setNewTaskDue(e.target.value)}
+                  />
+                  <button type="submit" className="btn btn-sm">
+                    <Plus size={13} />
+                    <span>追加</span>
+                  </button>
+                </form>
+              </div>
+            </div>
           </div>
 
           {/* Right Metadata Sidebar (GitHub Issue Sidebar style) */}
@@ -817,7 +994,8 @@ export function CompanyDetail({
             form.esEntries.map((es) => {
               const statusMeta = ES_STATUS_META[es.status] || ES_STATUS_META.idea;
               const isPreview = Boolean(previewEsIds[es.id]);
-              const charCount = es.draft.length;
+              const excludeWs = Boolean(excludeWsEsIds[es.id]);
+              const charCount = excludeWs ? es.draft.replace(/\s+/g, "").length : es.draft.length;
               const limit = es.charLimit;
               const ratio = limit ? Math.min(100, Math.round((charCount / limit) * 100)) : 0;
               const isOver = Boolean(limit && charCount > limit);
@@ -903,16 +1081,29 @@ export function CompanyDetail({
                     <div className="gh-field">
                       <div className="gh-row-between">
                         <label className="gh-field-label">回答下書き</label>
-                        <span
-                          className="mono"
-                          style={{
-                            fontSize: "12px",
-                            color: isOver ? "var(--danger-fg)" : "var(--fg-muted)",
-                            fontWeight: isOver ? 600 : 400,
-                          }}
-                        >
-                          {charCount} {limit ? `/ ${limit} 字 (${ratio}%)` : "字"}
-                        </span>
+                        <div className="gh-row-gap">
+                          <button
+                            type="button"
+                            className={`btn btn-sm ${excludeWs ? "btn-accent" : "btn-invisible"}`}
+                            style={{ height: "22px", fontSize: "11px", padding: "0 7px" }}
+                            onClick={() =>
+                              setExcludeWsEsIds((prev) => ({ ...prev, [es.id]: !excludeWs }))
+                            }
+                            aria-pressed={excludeWs}
+                          >
+                            {excludeWs ? "空白・改行除く" : "空白・改行含む"}
+                          </button>
+                          <span
+                            className="mono"
+                            style={{
+                              fontSize: "12px",
+                              color: isOver ? "var(--danger-fg)" : "var(--fg-muted)",
+                              fontWeight: isOver ? 600 : 400,
+                            }}
+                          >
+                            {charCount} {limit ? `/ ${limit} 字 (${ratio}%)` : "字"}
+                          </span>
+                        </div>
                       </div>
 
                       {limit ? (
