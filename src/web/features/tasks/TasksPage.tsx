@@ -15,7 +15,7 @@ import { useWorkspace } from "../../api/use-workspace";
 import { TASK_STATE_META, formatRelativeDate } from "../../constants/meta";
 
 export function TasksPage() {
-  const { data, isLoading, refetch, setSaveStatus } = useWorkspace();
+  const { data, isLoading, refetch, setSaveStatus, showToast } = useWorkspace();
   const [stateFilter, setStateFilter] = useState<"all" | "open" | "done">("open");
   const [companyFilter, setCompanyFilter] = useState<string>("all");
   const [search, setSearch] = useState("");
@@ -51,6 +51,7 @@ export function TasksPage() {
       setSaveStatus("saved");
     } catch {
       setSaveStatus("error");
+      showToast({ message: "タスクの更新に失敗しました", variant: "error" });
     }
   };
 
@@ -62,6 +63,7 @@ export function TasksPage() {
       setSaveStatus("saved");
     } catch {
       setSaveStatus("error");
+      showToast({ message: "タスクの更新に失敗しました", variant: "error" });
     }
   };
 
@@ -91,16 +93,38 @@ export function TasksPage() {
       setSaveStatus("saved");
     } catch {
       setSaveStatus("error");
+      showToast({ message: "タスクの作成に失敗しました", variant: "error" });
     }
   };
 
-  const handleDeleteTask = async (id: string) => {
+  const handleDeleteTask = async (task: TaskItem) => {
+    const snapshot: TaskItem = { ...task, deletedAt: undefined };
     try {
-      await deleteTaskApi(id);
-      if (editingId === id) setEditingId(null);
+      await deleteTaskApi(task.id);
+      if (editingId === task.id) setEditingId(null);
       await refetch();
+      showToast({
+        message: `タスク「${task.title}」を削除しました`,
+        variant: "info",
+        actionLabel: "元に戻す",
+        onAction: async () => {
+          try {
+            await createTask(snapshot);
+            await refetch();
+            showToast({ message: "タスクを復元しました", variant: "success" });
+          } catch (err) {
+            showToast({
+              message: `タスクの復元に失敗しました: ${(err as Error).message}`,
+              variant: "error",
+            });
+          }
+        },
+      });
     } catch (err) {
-      alert("タスクの削除に失敗しました: " + (err as Error).message);
+      showToast({
+        message: `タスクの削除に失敗しました: ${(err as Error).message}`,
+        variant: "error",
+      });
     }
   };
 
@@ -326,7 +350,7 @@ export function TasksPage() {
                       <button
                         type="button"
                         className="button-danger btn-sm"
-                        onClick={() => handleDeleteTask(t.id)}
+                        onClick={() => handleDeleteTask(t)}
                       >
                         <Trash2 size={13} />
                         <span>削除</span>

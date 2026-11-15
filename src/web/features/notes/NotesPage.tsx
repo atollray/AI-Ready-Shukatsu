@@ -7,7 +7,7 @@ import { useWorkspace } from "../../api/use-workspace";
 import { MarkdownPreview } from "../../components/MarkdownPreview";
 
 export function NotesPage() {
-  const { data, isLoading, refetch, setSaveStatus } = useWorkspace();
+  const { data, isLoading, refetch, setSaveStatus, showToast } = useWorkspace();
   const [searchParams, setSearchParams] = useSearchParams();
   const [search, setSearch] = useState("");
   const [mode, setMode] = useState<"write" | "preview">("write");
@@ -33,9 +33,45 @@ export function NotesPage() {
   const latestRevRef = useRef<number>(activeNote?.rev ?? 1);
   const activeIdRef = useRef<string | null>(activeNote?.id ?? null);
   const creatingIdRef = useRef<string | null>(null);
+  const dirtyRef = useRef<boolean>(false);
+
+  const flushPendingNote = () => {
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = null;
+    }
+    const pending = draftRef.current;
+    if (!dirtyRef.current || !pending || creatingIdRef.current === pending.id) {
+      dirtyRef.current = false;
+      return;
+    }
+    dirtyRef.current = false;
+    patchNote(
+      pending.id,
+      {
+        title: pending.title,
+        date: pending.date,
+        companyId: pending.companyId,
+        content: pending.content,
+      },
+      latestRevRef.current,
+    )
+      .then((saved) => {
+        latestRevRef.current = saved.rev;
+        setSaveStatus("saved");
+        void refetch();
+      })
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : "";
+        setSaveStatus(msg.startsWith("CONFLICT") ? "conflict" : "error");
+      });
+  };
 
   useEffect(() => {
     if (creatingIdRef.current && activeIdRef.current === creatingIdRef.current) {
+      if (activeNote?.id === creatingIdRef.current) {
+        creatingIdRef.current = null;
+      }
       return;
     }
     if (!activeNote) {
@@ -49,34 +85,34 @@ export function NotesPage() {
       return;
     }
     if (activeIdRef.current !== activeNote.id) {
-      if (saveTimeoutRef.current) {
-        clearTimeout(saveTimeoutRef.current);
-        saveTimeoutRef.current = null;
-      }
+      flushPendingNote();
       setDraft(activeNote);
       draftRef.current = activeNote;
       latestRevRef.current = activeNote.rev;
       activeIdRef.current = activeNote.id;
-    } else if (!saveTimeoutRef.current) {
+    } else if (!saveTimeoutRef.current && !dirtyRef.current) {
       setDraft(activeNote);
       draftRef.current = activeNote;
       latestRevRef.current = activeNote.rev;
     }
-  }, [activeNote, selectedFromParam]);
+  });
+
+  const flushRef = useRef(flushPendingNote);
+  flushRef.current = flushPendingNote;
 
   useEffect(() => {
     return () => {
-      if (saveTimeoutRef.current) {
-        clearTimeout(saveTimeoutRef.current);
-      }
+      flushRef.current();
     };
   }, []);
 
   const handleSelectNote = (id: string) => {
+    creatingIdRef.current = null;
     setSearchParams({ selected: id });
   };
 
   const handleCreateNote = async () => {
+    flushPendingNote();
     const now = new Date().toISOString();
     const newNote: NoteItem = {
       id: generateId("nt"),
@@ -94,6 +130,7 @@ export function NotesPage() {
       saveTimeoutRef.current = null;
     }
 
+    dirtyRef.current = false;
     creatingIdRef.current = newNote.id;
     activeIdRef.current = newNote.id;
     latestRevRef.current = 1;
@@ -105,6 +142,7 @@ export function NotesPage() {
     try {
       const saved = await createNote(newNote);
       latestRevRef.current = saved.rev;
+      setSearchParams({ selected: saved.id });
       // Preserve any edits typed while POST was in-flight
       const current = draftRef.current;
       if (
@@ -115,6 +153,11 @@ export function NotesPage() {
           current.companyId !== newNote.companyId ||
           current.date !== newNote.date)
       ) {
+        if (saveTimeoutRef.current) {
+          clearTimeout(saveTimeoutRef.current);
+          saveTimeoutRef.current = null;
+        }
+        dirtyRef.current = false;
         const patched = await patchNote(
           saved.id,
           {
@@ -127,13 +170,14 @@ export function NotesPage() {
         );
         latestRevRef.current = patched.rev;
       }
-      creatingIdRef.current = null;
       await refetch();
-      setSearchParams({ selected: saved.id });
-      setSaveStatus("saved");
+      if (!saveTimeoutRef.current && !dirtyRef.current) {
+        setSaveStatus("saved");
+      }
     } catch {
       creatingIdRef.current = null;
       setSaveStatus("error");
+      showToast({ message: "ノートの作成に失敗しました", variant: "error" });
     }
   };
 
@@ -142,6 +186,7 @@ export function NotesPage() {
     if (!base) return;
     const nextDraft = { ...base, ...patch };
     draftRef.current = nextDraft;
+    dirtyRef.current = true;
     setDraft(nextDraft);
     setSaveStatus("saving");
 
@@ -155,6 +200,7 @@ export function NotesPage() {
       if (creatingIdRef.current === targetId) return;
       const latest = draftRef.current;
       if (!latest || latest.id !== targetId) return;
+      dirtyRef.current = false;
       try {
         const saved = await patchNote(
           targetId,
@@ -176,20 +222,42 @@ export function NotesPage() {
     }, 550);
   };
 
-  const handleDeleteNote = async (id: string) => {
-    if (!window.confirm("このノートを削除しますか？")) return;
+  const handleDeleteNote = async (target: NoteItem) => {
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current);
       saveTimeoutRef.current = null;
     }
+    dirtyRef.current = false;
+    const snapshot: NoteItem = { ...target, deletedAt: undefined };
     try {
-      await deleteNoteApi(id);
+      await deleteNoteApi(target.id);
       activeIdRef.current = null;
       draftRef.current = null;
       await refetch();
       setSearchParams({});
+      showToast({
+        message: `ノート「${target.title || "無題"}」を削除しました`,
+        variant: "info",
+        actionLabel: "元に戻す",
+        onAction: async () => {
+          try {
+            const restored = await createNote(snapshot);
+            await refetch();
+            setSearchParams({ selected: restored.id });
+            showToast({ message: "ノートを復元しました", variant: "success" });
+          } catch (err) {
+            showToast({
+              message: `ノートの復元に失敗しました: ${(err as Error).message}`,
+              variant: "error",
+            });
+          }
+        },
+      });
     } catch (err) {
-      alert("ノートの削除に失敗しました: " + (err as Error).message);
+      showToast({
+        message: `ノートの削除に失敗しました: ${(err as Error).message}`,
+        variant: "error",
+      });
     }
   };
 
@@ -333,7 +401,7 @@ export function NotesPage() {
                 <button
                   type="button"
                   className="button-danger btn-sm"
-                  onClick={() => handleDeleteNote(draft.id)}
+                  onClick={() => handleDeleteNote(draft)}
                 >
                   <Trash2 size={13} />
                   <span>削除</span>
