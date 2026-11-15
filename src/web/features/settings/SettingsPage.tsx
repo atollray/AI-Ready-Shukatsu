@@ -401,7 +401,7 @@ export function SettingsPage() {
             <div className="gh-row-gap" style={{ flexWrap: "wrap" }}>
               <button
                 type="button"
-                className="button"
+                className="btn"
                 onClick={handleExportBackup}
                 disabled={isBackingUp}
               >
@@ -455,7 +455,7 @@ export function SettingsPage() {
                 形式で出力します。
               </p>
             </div>
-            <a href="/api/calendar.ics" download="shukatsu-calendar.ics" className="button">
+            <a href="/api/calendar.ics" download="shukatsu-calendar.ics" className="btn">
               <Calendar size={14} />
               <span>calendar.ics をダウンロード</span>
             </a>
