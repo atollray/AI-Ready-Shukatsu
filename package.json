@@ -8,7 +8,7 @@
     "shukatsu": "./dist/cli.js"
   },
   "scripts": {
-    "dev": "concurrently -n srv,web -c blue,green \"tsx watch src/server/node.ts\" \"vite\"",
+    "dev": "concurrently -n srv,web -c blue,green \"node --watch --import tsx src/server/node.ts\" \"vite\"",
     "build": "pnpm build:node && pnpm build:web",
     "build:node": "tsup",
     "build:web": "vite build",
